@@ -3,9 +3,27 @@ import { existsSync, mkdirSync } from "fs";
 import { rm } from "fs/promises";
 import path from "path";
 import os from "os";
+import { EventEmitter } from "events";
 import { connectMongo, App, Log, type AppStatus } from "@workspace/mongo";
 import mongoose from "mongoose";
 import { decrypt } from "../lib/crypto.js";
+
+// ---------------------------------------------------------------------------
+// In-memory log bus — instant delivery to SSE clients, no MongoDB polling
+// ---------------------------------------------------------------------------
+export interface LogEvent {
+  line: string;
+  stream: "stdout" | "stderr" | "system";
+  timestamp: Date;
+}
+
+const logBus = new EventEmitter();
+logBus.setMaxListeners(200); // allow many concurrent SSE clients
+
+export function subscribeToLogs(appId: string, cb: (ev: LogEvent) => void): () => void {
+  logBus.on(appId, cb);
+  return () => logBus.off(appId, cb);
+}
 
 const APPS_DIR = path.join(os.homedir(), ".nutterx-apps");
 
@@ -26,6 +44,10 @@ function getAppDir(slug: string): string {
 }
 
 async function writeLog(appId: string, line: string, stream: "stdout" | "stderr" | "system") {
+  const timestamp = new Date();
+  // Emit synchronously first — SSE clients receive log lines instantly
+  logBus.emit(appId, { line, stream, timestamp } satisfies LogEvent);
+  // Then persist to MongoDB in the background
   try {
     await connectMongo();
     const col = mongoose.connection.db?.collection("logs");
@@ -34,7 +56,7 @@ async function writeLog(appId: string, line: string, stream: "stdout" | "stderr"
         appId: new mongoose.Types.ObjectId(appId),
         line,
         stream,
-        timestamp: new Date(),
+        timestamp,
       });
     }
   } catch {
@@ -235,37 +257,3 @@ export function getProcessStatus(appId: string): boolean {
   return processes.has(appId);
 }
 
-export function streamLogs(appId: string, onLine: (line: string, stream: string, timestamp: Date) => void): () => void {
-  let active = true;
-  let changeStream: mongoose.mongo.ChangeStream | null = null;
-
-  const setup = async () => {
-    await connectMongo();
-    const col = mongoose.connection.db?.collection("logs");
-    if (!col) return;
-
-    try {
-      changeStream = col.watch([
-        { $match: { "fullDocument.appId": new mongoose.Types.ObjectId(appId) } },
-      ], { fullDocument: "updateLookup" }) as unknown as mongoose.mongo.ChangeStream;
-
-      changeStream.on("change", (change: Record<string, unknown>) => {
-        if (!active) return;
-        if (change.operationType === "insert" && change.fullDocument) {
-          const doc = change.fullDocument as Record<string, unknown>;
-          onLine(doc.line as string, doc.stream as string, doc.timestamp as Date);
-        }
-      });
-    } catch {
-    }
-  };
-
-  setup().catch(() => {});
-
-  return () => {
-    active = false;
-    if (changeStream) {
-      changeStream.close().catch(() => {});
-    }
-  };
-}

@@ -3,7 +3,7 @@ import slugify from "slugify";
 import mongoose from "mongoose";
 import { connectMongo, App, Log, type IApp } from "@workspace/mongo";
 import { requireAuth } from "../middlewares/auth.js";
-import { startApp, stopApp, restartApp } from "../services/processManager.js";
+import { startApp, stopApp, restartApp, subscribeToLogs } from "../services/processManager.js";
 import { encrypt, decrypt } from "../lib/crypto.js";
 
 const router: IRouter = Router();
@@ -538,29 +538,11 @@ router.get("/apps/:id/logs/stream", requireAuth, async (req: Request, res: Respo
     }
 
     const appId = (app._id as mongoose.Types.ObjectId).toString();
-    let changeStream: mongoose.mongo.ChangeStream | null = null;
 
-    try {
-      const col = mongoose.connection.db?.collection("logs");
-      if (col) {
-        changeStream = col.watch(
-          [{ $match: { "fullDocument.appId": new mongoose.Types.ObjectId(appId) } }],
-          { fullDocument: "updateLookup" }
-        ) as unknown as mongoose.mongo.ChangeStream;
-
-        changeStream.on("change", (change: Record<string, unknown>) => {
-          if (change.operationType === "insert" && change.fullDocument) {
-            const doc = change.fullDocument as Record<string, unknown>;
-            send({ line: doc.line, stream: doc.stream, timestamp: (doc.timestamp as Date).toISOString() });
-          }
-        });
-
-        changeStream.on("error", () => {
-          res.end();
-        });
-      }
-    } catch {
-    }
+    // Subscribe to the in-memory log bus — instant delivery, no MongoDB polling
+    const unsubscribe = subscribeToLogs(appId, (ev) => {
+      send({ line: ev.line, stream: ev.stream, timestamp: ev.timestamp.toISOString() });
+    });
 
     const keepAlive = setInterval(() => {
       res.write(": ping\n\n");
@@ -568,9 +550,7 @@ router.get("/apps/:id/logs/stream", requireAuth, async (req: Request, res: Respo
 
     req.on("close", () => {
       clearInterval(keepAlive);
-      if (changeStream) {
-        changeStream.close().catch(() => {});
-      }
+      unsubscribe();
     });
   } catch (err) {
     req.log.error(err);

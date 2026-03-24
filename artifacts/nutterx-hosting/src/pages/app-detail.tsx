@@ -168,8 +168,8 @@ export default function AppDetail() {
               {logs.length === 0 ? (
                 <div className="text-zinc-600 italic">Waiting for logs...</div>
               ) : (
-                logs.map((log) => (
-                  <div key={log.id} className="flex gap-4 hover:bg-white/5 px-2 rounded -mx-2 group">
+                logs.map((log, i) => (
+                  <div key={log.id ?? `${log.timestamp}-${i}`} className="flex gap-4 hover:bg-white/5 px-2 rounded -mx-2 group">
                     <span className="text-zinc-600 select-none flex-shrink-0 opacity-50 group-hover:opacity-100 transition-opacity">
                       {format(new Date(log.timestamp), 'HH:mm:ss')}
                     </span>
