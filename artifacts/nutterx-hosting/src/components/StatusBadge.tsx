@@ -1,10 +1,18 @@
+import { type ComponentType } from "react";
 import { Badge } from "@/components/ui/badge";
 import { AppStatus } from "@workspace/api-client-react";
 import { clsx } from "clsx";
 import { PlayCircle, StopCircle, Loader2, AlertTriangle, AlertCircle, Clock } from "lucide-react";
 
+type StatusConfig = {
+  color: string;
+  icon: ComponentType<{ className?: string }>;
+  label: string;
+  spin?: boolean;
+};
+
 export function StatusBadge({ status, className }: { status: AppStatus; className?: string }) {
-  const config = {
+  const config: Record<string, StatusConfig> = {
     running: {
       color: "bg-green-500/10 text-green-500 border-green-500/20 hover:bg-green-500/20",
       icon: PlayCircle,

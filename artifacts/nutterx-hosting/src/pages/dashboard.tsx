@@ -1,5 +1,5 @@
 import { AppLayout } from "@/components/AppLayout";
-import { useListApps } from "@workspace/api-client-react";
+import { useListApps, getListAppsQueryKey } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/StatusBadge";
 import { PaymentModal } from "@/components/PaymentModal";
@@ -17,7 +17,7 @@ interface BillingStatus {
 
 export default function Dashboard() {
   const { data: apps, isLoading, error } = useListApps({
-    query: { refetchInterval: 5000 },
+    query: { queryKey: getListAppsQueryKey(), refetchInterval: 5000 },
   });
 
   const [billing, setBilling] = useState<BillingStatus | null>(null);

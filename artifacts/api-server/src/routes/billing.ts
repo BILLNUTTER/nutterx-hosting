@@ -228,7 +228,7 @@ router.get("/billing/callback", async (req, res) => {
 // GET /api/billing/check/:trackingId — frontend polls this
 router.get("/billing/check/:trackingId", requireAuth, async (req, res) => {
   try {
-    const { trackingId } = req.params;
+    const trackingId = String(req.params.trackingId);
     await connectMongo();
     const payment = await Payment.findOne({ pesapalTrackingId: trackingId }).lean();
 
@@ -246,7 +246,7 @@ router.get("/billing/check/:trackingId", requireAuth, async (req, res) => {
     const token = await getPesapalToken(config);
     const result = await getTransactionStatus(config, token, trackingId);
 
-    if (result.status === "Completed" && payment.status !== "completed") {
+    if (result.status === "Completed") {
       await Payment.findByIdAndUpdate(payment._id, { status: "completed" });
 
       const now = new Date();
@@ -272,7 +272,7 @@ router.get("/billing/check/:trackingId", requireAuth, async (req, res) => {
       });
     }
 
-    res.json({ status: payment.status === "completed" ? "completed" : result.status.toLowerCase() });
+    res.json({ status: result.status === "Completed" ? "completed" : result.status.toLowerCase() });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

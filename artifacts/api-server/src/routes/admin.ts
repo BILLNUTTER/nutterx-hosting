@@ -698,14 +698,16 @@ router.get("/admin/settings", requireAdmin, async (req, res) => {
     await connectMongo();
     let settings = await PesapalSettings.findOne({}).lean();
     if (!settings) {
-      settings = await PesapalSettings.create({});
+      await PesapalSettings.create({});
+      settings = await PesapalSettings.findOne({}).lean();
     }
+    const s = settings!;
     res.json({
-      consumerKey: settings.consumerKey ?? "",
-      consumerSecret: settings.consumerSecret ? "***configured***" : "",
-      isProduction: settings.isProduction ?? false,
-      ipnId: settings.ipnId ?? "",
-      configured: !!(settings.consumerKey && settings.consumerSecret),
+      consumerKey: s.consumerKey ?? "",
+      consumerSecret: s.consumerSecret ? "***configured***" : "",
+      isProduction: s.isProduction ?? false,
+      ipnId: s.ipnId ?? "",
+      configured: !!(s.consumerKey && s.consumerSecret),
     });
   } catch (err) {
     req.log.error(err);

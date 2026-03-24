@@ -23,7 +23,7 @@ export default function AppDetail() {
   const [activeTab, setActiveTab] = useState("logs");
 
   const { data: app, isLoading } = useGetApp(id!, {
-    query: { refetchInterval: 3000 }
+    query: { queryKey: getGetAppQueryKey(id!), refetchInterval: 3000 }
   });
 
   const { mutate: startApp, isPending: isStarting } = useStartApp({
