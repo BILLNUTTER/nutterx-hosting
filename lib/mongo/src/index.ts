@@ -12,6 +12,7 @@ export async function connectMongo(): Promise<void> {
 
   await mongoose.connect(uri, {
     serverSelectionTimeoutMS: 10000,
+    maxPoolSize: 2,
   });
 
   isConnected = true;
