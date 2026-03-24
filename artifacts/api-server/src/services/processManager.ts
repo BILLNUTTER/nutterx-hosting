@@ -55,9 +55,9 @@ function detectPackageManager(appDir: string): string {
   return "npm";
 }
 
-async function runCommand(cmd: string, args: string[], cwd: string, appId: string): Promise<void> {
+async function runCommand(cmd: string, args: string[], cwd: string, appId: string, env?: Record<string, string>): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, { cwd, env: process.env, shell: true });
+    const proc = spawn(cmd, args, { cwd, env: env ?? process.env, shell: true });
     proc.stdout?.on("data", (d: Buffer) => {
       writeLog(appId, d.toString().trim(), "system").catch(() => {});
     });
@@ -100,11 +100,28 @@ export async function startApp(appId: string): Promise<void> {
     await runCommand("git", ["clone", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId);
 
     const pm = detectPackageManager(appDir);
-    const installCmd = app.installCommand || `${pm} install`;
+    let installCmd = app.installCommand || `${pm} install`;
+
+    // Ensure installs don't abort on platform OS restrictions (e.g. "platform linux is not allowed").
+    // npm ≥ 9.8 and pnpm ≥ 7 both support --ignore-platform.
+    // npm_config_ignore_platform=true env var covers nested npm invocations too.
+    if (/^\s*npm\s/.test(installCmd) && !/--ignore-platform/.test(installCmd)) {
+      installCmd = installCmd.trim() + " --ignore-platform";
+    } else if (/^\s*pnpm\s/.test(installCmd) && !/--ignore-platform/.test(installCmd)) {
+      installCmd = installCmd.trim() + " --ignore-platform";
+    }
+
+    const installEnv: Record<string, string> = {
+      ...(process.env as Record<string, string>),
+      npm_config_ignore_platform: "true",
+      // pnpm also reads this env var
+      PNPM_IGNORE_PLATFORM: "true",
+    };
+
     const [installBin, ...installArgs] = installCmd.split(" ");
 
     await writeLog(appId, `Installing dependencies with: ${installCmd}`, "system");
-    await runCommand(installBin, installArgs, appDir, appId);
+    await runCommand(installBin, installArgs, appDir, appId, installEnv);
 
     const envVars: Record<string, string> = { ...process.env } as Record<string, string>;
     for (const envVar of app.envVars) {
