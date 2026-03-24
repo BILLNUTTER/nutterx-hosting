@@ -326,6 +326,46 @@ router.post("/admin/users/:id/apps", requireAdmin, async (req, res) => {
   }
 });
 
+// POST /api/admin/users/:id/subscription — manually grant 30-day subscription
+router.post("/admin/users/:id/subscription", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const user = await User.findById(req.params.id).lean();
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+    // Create a manual payment record
+    const payment = await Payment.create({
+      userId: user._id.toString(),
+      email: user.email,
+      phone: "",
+      amount: 150,
+      currency: "KES",
+      pesapalOrderId: `manual-${Date.now()}`,
+      pesapalTrackingId: `manual-${Date.now()}`,
+      status: "completed",
+    });
+
+    await Subscription.create({
+      userId: user._id.toString(),
+      email: user.email,
+      status: "active",
+      paidAt: now,
+      expiresAt,
+      amount: 150,
+      currency: "KES",
+      paymentId: payment._id,
+    });
+
+    res.json({ message: "30-day subscription granted", expiresAt });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // PATCH /api/admin/apps/:id/action — stop/start app as admin
 router.patch("/admin/apps/:id/action", requireAdmin, async (req, res) => {
   try {
@@ -377,7 +417,7 @@ router.get("/admin/revenue", requireAdmin, async (req, res) => {
   }
 });
 
-// GET /api/admin/settings/test — verify credentials actually work with PesaPal
+// GET /api/admin/settings/test — verify credentials and return raw PesaPal response
 router.get("/admin/settings/test", requireAdmin, async (req, res) => {
   try {
     await connectMongo();
@@ -386,14 +426,50 @@ router.get("/admin/settings/test", requireAdmin, async (req, res) => {
       res.json({ ok: false, message: "No credentials saved. Enter your Consumer Key and Secret first." });
       return;
     }
-    const { getPesapalToken } = await import("../services/pesapal.js");
-    const config = {
-      consumerKey: settings.consumerKey.trim(),
-      consumerSecret: settings.consumerSecret.trim(),
-      isProduction: settings.isProduction ?? false,
-    };
-    const token = await getPesapalToken(config);
-    res.json({ ok: !!token, message: token ? "Connection successful! PesaPal accepted your credentials." : "PesaPal returned no token." });
+
+    const key = settings.consumerKey.trim();
+    const secret = settings.consumerSecret.trim();
+    const isProduction = settings.isProduction ?? false;
+    const baseUrl = isProduction
+      ? "https://pay.pesapal.com/v3"
+      : "https://cybqa.pesapal.com/pesapalv3";
+    const url = `${baseUrl}/api/Auth/RequestToken`;
+
+    let httpStatus = 0;
+    let rawBody = "";
+    let parsed: any = null;
+
+    try {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ consumer_key: key, consumer_secret: secret }),
+      });
+      httpStatus = r.status;
+      rawBody = await r.text();
+      try { parsed = JSON.parse(rawBody); } catch {}
+    } catch (fetchErr: any) {
+      res.json({ ok: false, message: `Network error reaching PesaPal: ${fetchErr.message}`, url });
+      return;
+    }
+
+    const token = parsed?.token;
+    const pesapalError = parsed?.error?.message || parsed?.error?.code || parsed?.message || rawBody.slice(0, 200);
+
+    res.json({
+      ok: !!token,
+      message: token
+        ? "Connection successful! PesaPal accepted your credentials."
+        : `PesaPal rejected credentials: ${pesapalError}`,
+      debug: {
+        url,
+        environment: isProduction ? "Production" : "Sandbox",
+        keyLength: key.length,
+        secretLength: secret.length,
+        httpStatus,
+        pesapalResponse: parsed ?? rawBody.slice(0, 500),
+      },
+    });
   } catch (err: any) {
     res.json({ ok: false, message: err.message ?? "Connection test failed" });
   }

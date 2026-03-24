@@ -101,6 +101,10 @@ export default function Admin() {
   const [userApps, setUserApps] = useState<Record<string, UserApp[]>>({});
   const [userAppsLoading, setUserAppsLoading] = useState<string | null>(null);
 
+  // Manual subscription
+  const [grantSubUserId, setGrantSubUserId] = useState<string | null>(null);
+  const [isGrantingSub, setIsGrantingSub] = useState(false);
+
   // Deploy for user
   const [deployUserId, setDeployUserId] = useState<string | null>(null);
   const [deployName, setDeployName] = useState("");
@@ -115,7 +119,7 @@ export default function Admin() {
   const [showSecret, setShowSecret] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string; debug?: Record<string, any> } | null>(null);
 
   useEffect(() => {
     if (!window.location.href.includes("admin=nutterxadmin=true")) {
@@ -277,6 +281,18 @@ export default function Admin() {
     } finally { setIsDeployingForUser(false); }
   };
 
+  const handleGrantSubscription = async (userId: string, email: string) => {
+    setGrantSubUserId(userId);
+    setIsGrantingSub(true);
+    try {
+      const res = await adminFetch(`/api/admin/users/${userId}/subscription`, { method: "POST" });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
+      toast({ title: "Subscription activated", description: `30-day subscription granted to ${email}.` });
+    } catch (err: any) {
+      toast({ title: "Failed", description: err.message, variant: "destructive" });
+    } finally { setGrantSubUserId(null); setIsGrantingSub(false); }
+  };
+
   const handleSaveSettings = async () => {
     const trimmedKey = settingsKey.trim();
     const trimmedSecret = settingsSecret.trim();
@@ -302,7 +318,7 @@ export default function Admin() {
     setTestResult(null);
     try {
       const res = await adminFetch("/api/admin/settings/test");
-      const data = await res.json() as { ok: boolean; message: string };
+      const data = await res.json() as { ok: boolean; message: string; debug?: Record<string, any> };
       setTestResult(data);
     } catch (err: any) {
       setTestResult({ ok: false, message: err.message ?? "Test failed" });
@@ -479,16 +495,30 @@ export default function Admin() {
                       {expandedUser === user.id && (
                         <tr key={user.id + "-expanded"} className="bg-muted/10 border-b border-border/40">
                           <td colSpan={8} className="px-6 py-4">
-                            <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
                               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Apps for {user.email}</p>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 text-xs gap-1.5"
-                                onClick={() => { setDeployUserId(user.id); setDeployName(""); setDeployRepo(""); setDeployStart(""); }}
-                              >
-                                <Plus className="w-3.5 h-3.5" /> Deploy App for User
-                              </Button>
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 text-xs gap-1.5"
+                                  onClick={() => handleGrantSubscription(user.id, user.email)}
+                                  disabled={isGrantingSub && grantSubUserId === user.id}
+                                >
+                                  {isGrantingSub && grantSubUserId === user.id
+                                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                                    : <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />}
+                                  Activate 30-day Sub
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 text-xs gap-1.5"
+                                  onClick={() => { setDeployUserId(user.id); setDeployName(""); setDeployRepo(""); setDeployStart(""); }}
+                                >
+                                  <Plus className="w-3.5 h-3.5" /> Deploy App for User
+                                </Button>
+                              </div>
                             </div>
 
                             {userAppsLoading === user.id ? (
@@ -702,15 +732,28 @@ export default function Admin() {
 
                 {testResult && (
                   <div className={clsx(
-                    "flex items-start gap-2 text-xs rounded-lg px-3 py-2.5",
+                    "rounded-lg px-3 py-2.5 space-y-1.5",
                     testResult.ok
                       ? "text-green-400 bg-green-500/10 border border-green-500/20"
                       : "text-red-400 bg-red-500/10 border border-red-500/20"
                   )}>
-                    {testResult.ok
-                      ? <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                      : <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />}
-                    <span className="leading-relaxed">{testResult.message}</span>
+                    <div className="flex items-start gap-2 text-xs">
+                      {testResult.ok
+                        ? <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                        : <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />}
+                      <span className="leading-relaxed font-medium">{testResult.message}</span>
+                    </div>
+                    {testResult.debug && !testResult.ok && (
+                      <div className="text-xs font-mono bg-black/20 rounded p-2 space-y-0.5 text-muted-foreground">
+                        <div>Environment: <span className="text-foreground">{testResult.debug.environment}</span></div>
+                        <div>URL: <span className="text-foreground break-all">{testResult.debug.url}</span></div>
+                        <div>Key length: <span className="text-foreground">{testResult.debug.keyLength} chars</span></div>
+                        <div>Secret length: <span className="text-foreground">{testResult.debug.secretLength} chars</span></div>
+                        <div>PesaPal HTTP: <span className="text-foreground">{testResult.debug.httpStatus}</span></div>
+                        <div className="mt-1">PesaPal response:</div>
+                        <pre className="whitespace-pre-wrap break-all text-foreground">{JSON.stringify(testResult.debug.pesapalResponse, null, 2)}</pre>
+                      </div>
+                    )}
                   </div>
                 )}
 
