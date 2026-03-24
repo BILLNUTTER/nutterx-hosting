@@ -37,11 +37,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const currentToken = localStorage.getItem("access_token");
       if (currentToken && typeof input === "string" && input.startsWith("/api/")) {
-        init = init || {};
-        init.headers = {
-          ...init.headers,
-          "Authorization": `Bearer ${currentToken}`,
-        };
+        init = { ...init };
+        // Use new Headers() so we preserve existing headers (including Content-Type)
+        // regardless of whether init.headers is a plain object, Headers instance, or array
+        const headers = new Headers(init.headers as HeadersInit | undefined);
+        headers.set("Authorization", `Bearer ${currentToken}`);
+        init.headers = headers;
       }
       return originalFetch(input, init);
     };

@@ -94,13 +94,38 @@ router.get("/apps/env-template", requireAuth, async (req: Request, res: Response
       }
     }
 
-    if (text === null) {
-      res.status(404).json({ error: ".env.example not found in repository" });
+    if (text !== null) {
+      const keys = parseEnvExample(text);
+      res.json({ keys, source: ".env.example" });
       return;
     }
 
-    const keys = parseEnvExample(text);
-    res.json({ keys });
+    // Fallback: parse app.json (Heroku-style) for env var definitions
+    for (const b of branchesToTry) {
+      const url = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/app.json`;
+      const resp = await fetch(url, { headers });
+      if (resp.ok) {
+        try {
+          const appJson = await resp.json() as Record<string, unknown>;
+          const envSection = appJson.env as Record<string, { description?: string; value?: string; required?: boolean }> | undefined;
+          if (envSection && typeof envSection === "object") {
+            const keys = Object.entries(envSection).map(([key, meta]) => ({
+              key,
+              defaultValue: meta?.value ?? "",
+              comment: meta?.description ?? null,
+              required: meta?.required !== false,
+            }));
+            res.json({ keys, source: "app.json" });
+            return;
+          }
+        } catch {
+          // not valid JSON, skip
+        }
+        break;
+      }
+    }
+
+    res.status(404).json({ error: "No .env.example or app.json found in repository" });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });

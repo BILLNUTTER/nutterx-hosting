@@ -6,7 +6,6 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card } from "@/components/ui/card";
 import { useCreateApp } from "@workspace/api-client-react";
-import type { EnvVar } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import {
@@ -30,12 +29,13 @@ export default function NewApp() {
   const [installCommand, setInstallCommand] = useState("");
   const [port, setPort] = useState("");
   const [autoRestart, setAutoRestart] = useState(true);
-  const [envVars, setEnvVars] = useState<EnvVar[]>([]);
+  const [envVars, setEnvVars] = useState<Array<{ key: string; value: string; comment?: string }>>([]);
 
   // Loading / status state
   const [isFetchingMeta, setIsFetchingMeta] = useState(false);
   const [isFetchingEnv, setIsFetchingEnv] = useState(false);
   const [envFetchStatus, setEnvFetchStatus] = useState<"idle" | "found" | "not_found" | "error">("idle");
+  const [envFetchSource, setEnvFetchSource] = useState<string>(".env.example");
   const [isDeploying, setIsDeploying] = useState(false);
 
   const { mutateAsync: createApp } = useCreateApp();
@@ -54,8 +54,9 @@ export default function NewApp() {
       });
       if (resp.ok) {
         const data = await resp.json();
-        const keys: Array<{ key: string; defaultValue: string }> = data.keys ?? [];
-        setEnvVars(keys.map((k) => ({ key: k.key, value: k.defaultValue || "" })));
+        const keys: Array<{ key: string; defaultValue: string; comment?: string | null }> = data.keys ?? [];
+        setEnvVars(keys.map((k) => ({ key: k.key, value: k.defaultValue || "", comment: k.comment ?? undefined })));
+        setEnvFetchSource(data.source ?? ".env.example");
         setEnvFetchStatus("found");
       } else if (resp.status === 404) {
         setEnvFetchStatus("not_found");
@@ -298,7 +299,7 @@ export default function NewApp() {
                   <div className="mb-5 p-3 bg-green-500/10 border border-green-500/20 text-green-300 rounded-lg text-sm flex items-start gap-2">
                     <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
                     <span>
-                      Found <strong>.env.example</strong> in the repository. Required fields are listed below — fill in the values.
+                      Found <strong>{envFetchSource}</strong> in the repository — required variables are listed below. Fill in your values.
                     </span>
                   </div>
                 )}
@@ -322,35 +323,43 @@ export default function NewApp() {
                 )}
 
                 {/* Env var rows */}
-                <div className="space-y-2 mb-4 max-h-[380px] overflow-y-auto pr-1">
+                <div className="space-y-3 mb-4 max-h-[380px] overflow-y-auto pr-1">
                   {envVars.length === 0 && isFetchingEnv && (
                     <div className="text-center py-8 text-muted-foreground">
                       <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
-                      Reading .env.example…
+                      Reading config…
                     </div>
                   )}
                   {envVars.map((ev, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <Input
-                        placeholder="VARIABLE_NAME"
-                        value={ev.key}
-                        onChange={(e) => updateEnvVar(i, "key", e.target.value)}
-                        className="flex-1 font-mono text-sm bg-black/20"
-                      />
-                      <Input
-                        placeholder="value"
-                        value={ev.value}
-                        onChange={(e) => updateEnvVar(i, "value", e.target.value)}
-                        className="flex-[2] font-mono text-sm bg-black/20"
-                      />
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => removeEnvVar(i)}
-                        className="shrink-0 text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                    <div key={i} className="space-y-1">
+                      {ev.comment && (
+                        <p className="text-xs text-muted-foreground pl-1 flex items-center gap-1">
+                          <Info className="w-3 h-3 shrink-0" />
+                          {ev.comment}
+                        </p>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <Input
+                          placeholder="VARIABLE_NAME"
+                          value={ev.key}
+                          onChange={(e) => updateEnvVar(i, "key", e.target.value)}
+                          className="flex-1 font-mono text-sm bg-black/20"
+                        />
+                        <Input
+                          placeholder="value"
+                          value={ev.value}
+                          onChange={(e) => updateEnvVar(i, "value", e.target.value)}
+                          className="flex-[2] font-mono text-sm bg-black/20"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeEnvVar(i)}
+                          className="shrink-0 text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
                     </div>
                   ))}
                 </div>
