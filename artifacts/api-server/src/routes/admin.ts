@@ -417,6 +417,42 @@ router.get("/admin/revenue", requireAdmin, async (req, res) => {
   }
 });
 
+// POST /api/admin/settings/rawtest — test credentials passed in body, bypass MongoDB
+router.post("/admin/settings/rawtest", requireAdmin, async (req, res) => {
+  const { consumerKey, consumerSecret, isProduction } = req.body as {
+    consumerKey: string;
+    consumerSecret: string;
+    isProduction?: boolean;
+  };
+  const key = (consumerKey ?? "").trim();
+  const secret = (consumerSecret ?? "").trim();
+  const prod = isProduction ?? false;
+  const baseUrl = prod ? "https://pay.pesapal.com/v3" : "https://cybqa.pesapal.com/pesapalv3";
+  const url = `${baseUrl}/api/Auth/RequestToken`;
+  const payload = JSON.stringify({ consumer_key: key, consumer_secret: secret });
+
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: payload,
+    });
+    const rawBody = await r.text();
+    let parsed: any = null;
+    try { parsed = JSON.parse(rawBody); } catch {}
+    res.json({
+      httpStatus: r.status,
+      requestPayload: payload,
+      keyLength: key.length,
+      secretLength: secret.length,
+      pesapalResponse: parsed ?? rawBody,
+      gotToken: !!(parsed?.token),
+    });
+  } catch (err: any) {
+    res.json({ error: err.message });
+  }
+});
+
 // GET /api/admin/settings/test — verify credentials and return raw PesaPal response
 router.get("/admin/settings/test", requireAdmin, async (req, res) => {
   try {

@@ -316,10 +316,39 @@ export default function Admin() {
   const handleTestConnection = async () => {
     setIsTesting(true);
     setTestResult(null);
+    // If credentials are typed in the fields, test them directly (bypass MongoDB).
+    // Otherwise fall back to testing what's saved in the database.
+    const currentKey = settingsKey.trim();
+    const currentSecret = settingsSecret.trim();
     try {
-      const res = await adminFetch("/api/admin/settings/test");
-      const data = await res.json() as { ok: boolean; message: string; debug?: Record<string, any> };
-      setTestResult(data);
+      if (currentKey && currentSecret) {
+        // Raw test — sends exactly what is typed, never touches DB
+        const res = await adminFetch("/api/admin/settings/rawtest", {
+          method: "POST",
+          body: JSON.stringify({ consumerKey: currentKey, consumerSecret: currentSecret, isProduction: settingsProd }),
+        });
+        const data = await res.json() as { gotToken?: boolean; requestPayload?: string; pesapalResponse?: any; error?: string; httpStatus?: number; keyLength?: number; secretLength?: number };
+        setTestResult({
+          ok: !!data.gotToken,
+          message: data.gotToken
+            ? "Connection successful! PesaPal accepted these credentials."
+            : `PesaPal rejected credentials: ${data.pesapalResponse?.error?.message ?? data.pesapalResponse?.message ?? JSON.stringify(data.pesapalResponse ?? data.error)}`,
+          debug: {
+            source: "Typed in fields (not from database)",
+            environment: settingsProd ? "Production" : "Sandbox",
+            keyLength: data.keyLength,
+            secretLength: data.secretLength,
+            requestPayload: data.requestPayload,
+            httpStatus: data.httpStatus,
+            pesapalResponse: data.pesapalResponse,
+          },
+        });
+      } else {
+        // Test what's saved in DB
+        const res = await adminFetch("/api/admin/settings/test");
+        const data = await res.json() as { ok: boolean; message: string; debug?: Record<string, any> };
+        setTestResult(data);
+      }
     } catch (err: any) {
       setTestResult({ ok: false, message: err.message ?? "Test failed" });
     } finally { setIsTesting(false); }
@@ -766,11 +795,18 @@ export default function Admin() {
                     </div>
                     {testResult.debug && !testResult.ok && (
                       <div className="text-xs font-mono bg-black/20 rounded p-2 space-y-0.5 text-muted-foreground">
+                        {testResult.debug.source && <div>Source: <span className="text-foreground">{testResult.debug.source}</span></div>}
                         <div>Environment: <span className="text-foreground">{testResult.debug.environment}</span></div>
-                        <div>URL: <span className="text-foreground break-all">{testResult.debug.url}</span></div>
+                        {testResult.debug.url && <div>URL: <span className="text-foreground break-all">{testResult.debug.url}</span></div>}
                         <div>Key length: <span className="text-foreground">{testResult.debug.keyLength} chars</span></div>
                         <div>Secret length: <span className="text-foreground">{testResult.debug.secretLength} chars</span></div>
-                        <div>PesaPal HTTP: <span className="text-foreground">{testResult.debug.httpStatus}</span></div>
+                        <div>PesaPal HTTP status: <span className="text-foreground">{testResult.debug.httpStatus}</span></div>
+                        {testResult.debug.requestPayload && (
+                          <>
+                            <div className="mt-1">Exact JSON sent to PesaPal:</div>
+                            <pre className="whitespace-pre-wrap break-all text-yellow-400">{testResult.debug.requestPayload}</pre>
+                          </>
+                        )}
                         <div className="mt-1">PesaPal response:</div>
                         <pre className="whitespace-pre-wrap break-all text-foreground">{JSON.stringify(testResult.debug.pesapalResponse, null, 2)}</pre>
                       </div>
@@ -793,11 +829,12 @@ export default function Admin() {
                   <Button
                     variant="outline"
                     onClick={handleTestConnection}
-                    disabled={isTesting || !pesapalConfig?.configured}
+                    disabled={isTesting}
                     className="gap-2"
+                    title={settingsKey.trim() && settingsSecret.trim() ? "Test credentials typed above" : "Test credentials saved in database"}
                   >
                     {isTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                    Test
+                    {settingsKey.trim() && settingsSecret.trim() ? "Test these" : "Test saved"}
                   </Button>
                 </div>
 
