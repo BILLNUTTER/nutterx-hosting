@@ -43,8 +43,11 @@ export function useLogStream(appId: string) {
         async onopen(res) {
           if (res.ok && res.status === 200) {
             retryCount = 0;
+          } else if (res.status === 401) {
+            // Auth error — stop retrying silently; auth hook handles redirect
+            ctrl.abort();
           } else if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-            throw new Error(`Fatal error: ${res.status}`);
+            throw new Error(`Fatal SSE error: ${res.status}`);
           }
         },
         onmessage(ev) {
@@ -60,12 +63,13 @@ export function useLogStream(appId: string) {
           }
         },
         onerror(err) {
-          if (retryCount >= 5) {
-            throw err;
-          }
+          if (ctrl.signal.aborted) throw err; // don't retry if we aborted
+          if (retryCount >= 5) throw err;
           retryCount++;
           return 3000;
         },
+      }).catch(() => {
+        // Swallow — auth errors and abort are handled above
       });
     }
 
