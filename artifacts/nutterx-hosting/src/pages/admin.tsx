@@ -678,9 +678,30 @@ export default function Admin() {
           <TabsContent value="settings">
             <div className="max-w-xl">
               <div className="bg-card border border-border rounded-xl p-6 space-y-5">
-                <div className="flex items-center gap-2.5 mb-2">
-                  <Settings2 className="w-4 h-4 text-primary" />
-                  <h3 className="font-semibold text-sm">PesaPal Integration</h3>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2.5">
+                    <Settings2 className="w-4 h-4 text-primary" />
+                    <h3 className="font-semibold text-sm">PesaPal Integration</h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSettingsKey("qkio1BGGYAXTu2JOfm7XSXNruoZsrqEW");
+                      setSettingsSecret("osGQ364R49cXKeOYSpaOnT++rHs=");
+                      setSettingsProd(false);
+                      setTestResult(null);
+                    }}
+                    className="text-xs text-primary underline underline-offset-2 hover:no-underline"
+                  >
+                    Use official sandbox demo credentials
+                  </button>
+                </div>
+
+                <div className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2.5">
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <span className="leading-relaxed">
+                    New PesaPal accounts require manual approval (1–3 business days). If your real credentials are rejected, use the sandbox demo credentials above to test the full payment flow while you wait.
+                  </span>
                 </div>
 
                 <div className="space-y-2">
