@@ -7,7 +7,6 @@ import { useLogStream } from "@/hooks/use-log-stream";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
@@ -21,6 +20,7 @@ export default function AppDetail() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState("logs");
 
   const { data: app, isLoading } = useGetApp(id!, {
     query: { refetchInterval: 3000 }
@@ -40,6 +40,18 @@ export default function AppDetail() {
 
   const { logs, clearLogs } = useLogStream(id!);
   const logsEndRef = useRef<HTMLDivElement>(null);
+
+  const handleStart = () => {
+    clearLogs();
+    setActiveTab("logs");
+    startApp({ id: app!.id });
+  };
+
+  const handleRestart = () => {
+    clearLogs();
+    setActiveTab("logs");
+    restartApp({ id: app!.id });
+  };
 
   // Auto-scroll logs
   useEffect(() => {
@@ -105,7 +117,7 @@ export default function AppDetail() {
         <div className="flex items-center gap-2">
           {!isProcessActive ? (
             <Button 
-              onClick={() => startApp({ id: app.id })} 
+              onClick={handleStart}
               disabled={isStarting} 
               className="bg-green-600 hover:bg-green-700 text-white gap-2 shadow-[0_0_15px_rgba(34,197,94,0.3)]"
             >
@@ -123,7 +135,7 @@ export default function AppDetail() {
           )}
           <Button 
             variant="outline" 
-            onClick={() => restartApp({ id: app.id })} 
+            onClick={handleRestart}
             disabled={isRestarting}
             className="gap-2"
           >
@@ -132,7 +144,7 @@ export default function AppDetail() {
         </div>
       </div>
 
-      <Tabs defaultValue="logs" className="w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="bg-card border border-border w-full justify-start h-12 rounded-xl mb-6">
           <TabsTrigger value="logs" className="gap-2 data-[state=active]:bg-background"><Terminal className="w-4 h-4" /> Console Logs</TabsTrigger>
           <TabsTrigger value="settings" className="gap-2 data-[state=active]:bg-background"><Settings className="w-4 h-4" /> Settings & Env</TabsTrigger>

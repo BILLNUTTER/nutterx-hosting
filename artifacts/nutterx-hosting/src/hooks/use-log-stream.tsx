@@ -5,11 +5,16 @@ import type { LogEntry } from "@workspace/api-client-react";
 
 export function useLogStream(appId: string) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  // Track whether the user manually cleared so we don't re-seed from cache
+  const clearedRef = useRef(false);
+  const seededRef = useRef(false);
+
   const { data: initialLogs } = useGetAppLogs(appId, { limit: 200 });
 
-  // Initialize with fetched history
+  // Seed with historical logs once on mount (not after manual clear)
   useEffect(() => {
-    if (initialLogs && logs.length === 0) {
+    if (initialLogs && !seededRef.current && !clearedRef.current) {
+      seededRef.current = true;
       setLogs(initialLogs);
     }
   }, [initialLogs]);
@@ -30,9 +35,8 @@ export function useLogStream(appId: string) {
         signal: ctrl.signal,
         async onopen(res) {
           if (res.ok && res.status === 200) {
-            retryCount = 0; // reset
+            retryCount = 0;
           } else if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-            // client error, don't retry
             throw new Error(`Fatal error: ${res.status}`);
           }
         },
@@ -40,7 +44,6 @@ export function useLogStream(appId: string) {
           try {
             const newLog = JSON.parse(ev.data) as LogEntry;
             setLogs((prev) => {
-              // Ensure uniqueness if same event fires
               if (prev.some((l) => l.id === newLog.id)) return prev;
               return [...prev, newLog];
             });
@@ -50,10 +53,10 @@ export function useLogStream(appId: string) {
         },
         onerror(err) {
           if (retryCount >= 5) {
-            throw err; // Stop retrying after 5 attempts
+            throw err;
           }
           retryCount++;
-          return 3000; // Retry after 3 seconds
+          return 3000;
         }
       });
     }
@@ -65,7 +68,10 @@ export function useLogStream(appId: string) {
     };
   }, [appId]);
 
-  const clearLogs = () => setLogs([]);
+  const clearLogs = () => {
+    clearedRef.current = true;
+    setLogs([]);
+  };
 
   return { logs, clearLogs };
 }
