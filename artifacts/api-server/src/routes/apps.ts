@@ -519,8 +519,12 @@ router.get("/apps/:id/logs/stream", requireAuth, async (req: Request, res: Respo
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
 
+    // flush helper — forces data through Express + any proxy buffering
+    const flush = () => { if (typeof (res as unknown as { flush?: () => void }).flush === "function") (res as unknown as { flush: () => void }).flush(); };
+
     const send = (data: unknown) => {
       res.write(`data: ${JSON.stringify(data)}\n\n`);
+      flush();
     };
 
     // If ?since= provided, only send logs after that timestamp (gap-fill).
@@ -546,7 +550,8 @@ router.get("/apps/:id/logs/stream", requireAuth, async (req: Request, res: Respo
 
     const keepAlive = setInterval(() => {
       res.write(": ping\n\n");
-    }, 30000);
+      flush();
+    }, 15000);
 
     req.on("close", () => {
       clearInterval(keepAlive);

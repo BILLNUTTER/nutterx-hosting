@@ -15,13 +15,20 @@ declare global {
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  // Accept token from Authorization header OR ?token= query param (needed for native EventSource)
+  let token: string | undefined;
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) {
+  if (authHeader?.startsWith("Bearer ")) {
+    token = authHeader.slice(7);
+  } else if (typeof req.query.token === "string" && req.query.token) {
+    token = req.query.token;
+  }
+
+  if (!token) {
     res.status(401).json({ error: "Missing or invalid authorization header" });
     return;
   }
 
-  const token = authHeader.slice(7);
   const secret = process.env.JWT_SECRET;
   if (!secret) {
     res.status(500).json({ error: "JWT_SECRET not configured" });

@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import { fetchEventSource } from "@microsoft/fetch-event-source";
 import { useGetAppLogs } from "@workspace/api-client-react";
 import type { LogEntry } from "@workspace/api-client-react";
 
@@ -27,56 +26,58 @@ export function useLogStream(appId: string) {
   useEffect(() => {
     if (!appId) return;
 
+    let destroyed = false;
+    let source: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let retryCount = 0;
-    const ctrl = new AbortController();
-    const token = localStorage.getItem("access_token");
+
     const since = sinceRef.current;
-    const url = `/api/apps/${appId}/logs/stream${since ? `?since=${encodeURIComponent(since)}` : ""}`;
+
+    function buildUrl() {
+      const token = localStorage.getItem("access_token") ?? "";
+      const params = new URLSearchParams({ token });
+      if (since) params.set("since", since);
+      return `/api/apps/${appId}/logs/stream?${params.toString()}`;
+    }
+
+    function addLog(newLog: LogEntry) {
+      setLogs((prev) => {
+        // Deduplicate by timestamp+line (SSE logs have no id)
+        if (prev.some((l) => l.timestamp === newLog.timestamp && l.line === newLog.line)) return prev;
+        return [...prev, newLog];
+      });
+    }
 
     function connect() {
-      fetchEventSource(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        signal: ctrl.signal,
-        async onopen(res) {
-          if (res.ok && res.status === 200) {
-            retryCount = 0;
-          } else if (res.status === 401) {
-            // Auth error — stop retrying silently; auth hook handles redirect
-            ctrl.abort();
-          } else if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-            throw new Error(`Fatal SSE error: ${res.status}`);
-          }
-        },
-        onmessage(ev) {
-          try {
-            const newLog = JSON.parse(ev.data) as LogEntry;
-            setLogs((prev) => {
-              // Deduplicate: SSE logs have no id so match on timestamp+line
-              if (prev.some((l) => l.timestamp === newLog.timestamp && l.line === newLog.line)) return prev;
-              return [...prev, newLog];
-            });
-          } catch {
-            // ignore parse errors (ping comments etc.)
-          }
-        },
-        onerror(err) {
-          if (ctrl.signal.aborted) throw err; // don't retry if we aborted
-          if (retryCount >= 5) throw err;
-          retryCount++;
-          return 3000;
-        },
-      }).catch(() => {
-        // Swallow — auth errors and abort are handled above
-      });
+      if (destroyed) return;
+      source = new EventSource(buildUrl());
+
+      source.onmessage = (ev) => {
+        try {
+          addLog(JSON.parse(ev.data) as LogEntry);
+        } catch {
+          // ignore malformed events
+        }
+      };
+
+      source.onerror = () => {
+        source?.close();
+        source = null;
+        if (destroyed) return;
+        // Back-off retry: 2s → 4s → 8s (cap at 30s, max 8 retries)
+        if (retryCount >= 8) return;
+        const delay = Math.min(2000 * Math.pow(2, retryCount), 30000);
+        retryCount++;
+        retryTimer = setTimeout(connect, delay);
+      };
     }
 
     connect();
 
     return () => {
-      ctrl.abort();
+      destroyed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      source?.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appId, connectionKey]);

@@ -77,15 +77,19 @@ function detectPackageManager(appDir: string): string {
   return "npm";
 }
 
+function emitLines(appId: string, chunk: Buffer, stream: "stdout" | "stderr" | "system") {
+  // Split on newlines AND carriage-returns so git/npm progress lines each become a log entry
+  const lines = chunk.toString().split(/\r?\n|\r/).filter((l) => l.trim());
+  for (const line of lines) {
+    writeLog(appId, line, stream).catch(() => {});
+  }
+}
+
 async function runCommand(cmd: string, args: string[], cwd: string, appId: string, env?: Record<string, string>): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, { cwd, env: env ?? process.env, shell: true });
-    proc.stdout?.on("data", (d: Buffer) => {
-      writeLog(appId, d.toString().trim(), "system").catch(() => {});
-    });
-    proc.stderr?.on("data", (d: Buffer) => {
-      writeLog(appId, d.toString().trim(), "stderr").catch(() => {});
-    });
+    proc.stdout?.on("data", (d: Buffer) => emitLines(appId, d, "system"));
+    proc.stderr?.on("data", (d: Buffer) => emitLines(appId, d, "stderr"));
     proc.on("close", (code) => {
       if (code === 0) resolve();
       else reject(new Error(`Process exited with code ${code}`));
@@ -119,7 +123,7 @@ export async function startApp(appId: string): Promise<void> {
 
     const branch = app.branch || "main";
     await writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
-    await runCommand("git", ["clone", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId);
+    await runCommand("git", ["clone", "--progress", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId);
 
     const pm = detectPackageManager(appDir);
     let installCmd = app.installCommand || `${pm} install`;
