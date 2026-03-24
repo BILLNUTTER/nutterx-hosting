@@ -40,15 +40,18 @@ export default function AppDetail() {
 
   const { logs, clearLogs } = useLogStream(id!);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const [showAllCrashLogs, setShowAllCrashLogs] = useState(false);
 
   const handleStart = () => {
     clearLogs();
+    setShowAllCrashLogs(false);
     setActiveTab("logs");
     startApp({ id: app!.id });
   };
 
   const handleRestart = () => {
     clearLogs();
+    setShowAllCrashLogs(false);
     setActiveTab("logs");
     restartApp({ id: app!.id });
   };
@@ -201,22 +204,45 @@ export default function AppDetail() {
             <div className="flex-1 overflow-y-auto p-4 font-mono text-[13px] leading-relaxed custom-scrollbar">
               {logs.length === 0 ? (
                 <div className="text-zinc-600 italic">Waiting for logs...</div>
-              ) : (
-                logs.map((log, i) => (
-                  <div key={log.id ?? `${log.timestamp}-${i}`} className="flex gap-4 hover:bg-white/5 px-2 rounded -mx-2 group">
-                    <span className="text-zinc-600 select-none flex-shrink-0 opacity-50 group-hover:opacity-100 transition-opacity">
-                      {format(new Date(log.timestamp), 'HH:mm:ss')}
-                    </span>
-                    <span className={clsx(
-                      "flex-1 break-all",
-                      log.stream === 'stderr' ? 'text-red-400' :
-                      log.stream === 'system' ? 'text-amber-400' : 'text-zinc-300'
-                    )}>
-                      {log.line}
-                    </span>
-                  </div>
-                ))
-              )}
+              ) : (() => {
+                const isCrashed = app.status === 'crashed';
+                const displayedLogs = isCrashed && !showAllCrashLogs ? logs.slice(-2) : logs;
+                const hiddenCount = logs.length - displayedLogs.length;
+                return (
+                  <>
+                    {isCrashed && hiddenCount > 0 && (
+                      <button
+                        onClick={() => setShowAllCrashLogs(true)}
+                        className="w-full text-center text-xs text-zinc-500 hover:text-zinc-300 bg-white/[0.03] border border-white/10 rounded py-1.5 mb-3 transition-colors"
+                      >
+                        ↑ Show {hiddenCount} earlier log {hiddenCount === 1 ? "line" : "lines"}
+                      </button>
+                    )}
+                    {displayedLogs.map((log, i) => (
+                      <div key={log.id ?? `${log.timestamp}-${i}`} className="flex gap-4 hover:bg-white/5 px-2 rounded -mx-2 group">
+                        <span className="text-zinc-600 select-none flex-shrink-0 opacity-50 group-hover:opacity-100 transition-opacity">
+                          {format(new Date(log.timestamp), 'HH:mm:ss')}
+                        </span>
+                        <span className={clsx(
+                          "flex-1 break-all",
+                          log.stream === 'stderr' ? 'text-red-400' :
+                          log.stream === 'system' ? 'text-amber-400' : 'text-zinc-300'
+                        )}>
+                          {log.line}
+                        </span>
+                      </div>
+                    ))}
+                    {isCrashed && showAllCrashLogs && (
+                      <button
+                        onClick={() => setShowAllCrashLogs(false)}
+                        className="w-full text-center text-xs text-zinc-500 hover:text-zinc-300 bg-white/[0.03] border border-white/10 rounded py-1.5 mt-3 transition-colors"
+                      >
+                        ↑ Collapse to last 2 lines
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
               <div ref={logsEndRef} />
             </div>
           </Card>

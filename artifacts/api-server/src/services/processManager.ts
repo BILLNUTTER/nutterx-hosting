@@ -18,7 +18,7 @@ export interface LogEvent {
 }
 
 const logBus = new EventEmitter();
-logBus.setMaxListeners(200); // allow many concurrent SSE clients
+logBus.setMaxListeners(200);
 
 export function subscribeToLogs(appId: string, cb: (ev: LogEvent) => void): () => void {
   logBus.on(appId, cb);
@@ -34,7 +34,14 @@ interface RunningProcess {
   stopped: boolean;
 }
 
+// Running app processes (post-deploy)
 const processes = new Map<string, RunningProcess>();
+
+// Build-phase subprocesses (git clone / npm install) — tracked for cancellation
+const buildProcs = new Map<string, ChildProcess>();
+
+// Apps for which Stop was requested — checked at every build stage boundary
+const stopRequested = new Set<string>();
 
 function getAppDir(slug: string): string {
   if (!existsSync(APPS_DIR)) {
@@ -45,9 +52,7 @@ function getAppDir(slug: string): string {
 
 async function writeLog(appId: string, line: string, stream: "stdout" | "stderr" | "system") {
   const timestamp = new Date();
-  // Emit synchronously first — SSE clients receive log lines instantly
   logBus.emit(appId, { line, stream, timestamp } satisfies LogEvent);
-  // Then persist to MongoDB in the background
   try {
     await connectMongo();
     const col = mongoose.connection.db?.collection("logs");
@@ -78,24 +83,55 @@ function detectPackageManager(appDir: string): string {
 }
 
 function emitLines(appId: string, chunk: Buffer, stream: "stdout" | "stderr" | "system") {
-  // Split on newlines AND carriage-returns so git/npm progress lines each become a log entry
   const lines = chunk.toString().split(/\r?\n|\r/).filter((l) => l.trim());
   for (const line of lines) {
     writeLog(appId, line, stream).catch(() => {});
   }
 }
 
-async function runCommand(cmd: string, args: string[], cwd: string, appId: string, env?: Record<string, string>): Promise<void> {
+/**
+ * Run a shell command, tracking the subprocess in buildProcs so it can be
+ * killed if Stop is requested mid-build.  Resolves on exit code 0, rejects
+ * otherwise (including if the process is killed by Stop).
+ */
+async function runCommand(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  appId: string,
+  env?: Record<string, string>
+): Promise<void> {
   return new Promise((resolve, reject) => {
+    // Honour a stop request that arrived before this command started
+    if (stopRequested.has(appId)) {
+      reject(new Error("Build cancelled by user"));
+      return;
+    }
+
     const proc = spawn(cmd, args, { cwd, env: env ?? process.env, shell: true });
+    buildProcs.set(appId, proc);
+
     proc.stdout?.on("data", (d: Buffer) => emitLines(appId, d, "system"));
     proc.stderr?.on("data", (d: Buffer) => emitLines(appId, d, "stderr"));
+
     proc.on("close", (code) => {
+      buildProcs.delete(appId);
+      // null = killed by signal (stop requested) — treat as cancelled
       if (code === 0) resolve();
+      else if (code === null && stopRequested.has(appId)) reject(new Error("Build cancelled by user"));
       else reject(new Error(`Process exited with code ${code}`));
     });
-    proc.on("error", reject);
+
+    proc.on("error", (err) => {
+      buildProcs.delete(appId);
+      reject(err);
+    });
   });
+}
+
+/** Check if a stop was requested for this app at a stage boundary. */
+function checkAbort(appId: string): boolean {
+  return stopRequested.has(appId);
 }
 
 export async function startApp(appId: string): Promise<void> {
@@ -107,6 +143,9 @@ export async function startApp(appId: string): Promise<void> {
     throw new Error("App is already running");
   }
 
+  // Clear any stale stop flag from a previous cycle
+  stopRequested.delete(appId);
+
   await setStatus(appId, "installing");
   await writeLog(appId, `Starting deployment for ${app.name}...`, "system");
 
@@ -117,6 +156,9 @@ export async function startApp(appId: string): Promise<void> {
   }
 
   try {
+    // ── Stage: clone ───────────────────────────────────────────────────────
+    if (checkAbort(appId)) throw new Error("Build cancelled by user");
+
     const cloneUrl = app.pat
       ? app.repoUrl.replace("https://", `https://${app.pat}@`)
       : app.repoUrl;
@@ -125,12 +167,12 @@ export async function startApp(appId: string): Promise<void> {
     await writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
     await runCommand("git", ["clone", "--progress", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId);
 
+    // ── Stage: install ────────────────────────────────────────────────────
+    if (checkAbort(appId)) throw new Error("Build cancelled by user");
+
     const pm = detectPackageManager(appDir);
     let installCmd = app.installCommand || `${pm} install`;
 
-    // Ensure installs don't abort on platform OS restrictions (e.g. "platform linux is not allowed").
-    // npm ≥ 9.8 and pnpm ≥ 7 both support --ignore-platform.
-    // npm_config_ignore_platform=true env var covers nested npm invocations too.
     if (/^\s*npm\s/.test(installCmd) && !/--ignore-platform/.test(installCmd)) {
       installCmd = installCmd.trim() + " --ignore-platform";
     } else if (/^\s*pnpm\s/.test(installCmd) && !/--ignore-platform/.test(installCmd)) {
@@ -140,7 +182,6 @@ export async function startApp(appId: string): Promise<void> {
     const installEnv: Record<string, string> = {
       ...(process.env as Record<string, string>),
       npm_config_ignore_platform: "true",
-      // pnpm also reads this env var
       PNPM_IGNORE_PLATFORM: "true",
     };
 
@@ -148,6 +189,9 @@ export async function startApp(appId: string): Promise<void> {
 
     await writeLog(appId, `Installing dependencies with: ${installCmd}`, "system");
     await runCommand(installBin, installArgs, appDir, appId, installEnv);
+
+    // ── Stage: start ──────────────────────────────────────────────────────
+    if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
     const envVars: Record<string, string> = { ...process.env } as Record<string, string>;
     for (const envVar of app.envVars) {
@@ -223,18 +267,46 @@ export async function startApp(appId: string): Promise<void> {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await writeLog(appId, `Deployment failed: ${message}`, "system");
-    await setStatus(appId, "error", message);
-    throw err;
+    const isCancelled = message === "Build cancelled by user";
+
+    stopRequested.delete(appId);
+    buildProcs.delete(appId);
+
+    if (isCancelled) {
+      await writeLog(appId, "Deployment cancelled by user.", "system");
+      await setStatus(appId, "stopped");
+    } else {
+      await writeLog(appId, `Deployment failed: ${message}`, "system");
+      await setStatus(appId, "error", message);
+      throw err;
+    }
   }
 }
 
 export async function stopApp(appId: string): Promise<void> {
+  // Signal any ongoing build to abort at the next stage check
+  stopRequested.add(appId);
+
+  // Kill any currently running build subprocess immediately
+  const buildProc = buildProcs.get(appId);
+  if (buildProc && !buildProc.killed) {
+    buildProc.kill("SIGTERM");
+    setTimeout(() => {
+      if (!buildProc.killed) buildProc.kill("SIGKILL");
+    }, 3000);
+    buildProcs.delete(appId);
+  }
+
+  // Kill the running app process if there is one
   const entry = processes.get(appId);
   if (!entry) {
-    await setStatus(appId, "stopped");
+    // No running process — if no build was active either, just set stopped
+    if (!buildProc) {
+      await setStatus(appId, "stopped");
+    }
     return;
   }
+
   entry.stopped = true;
   entry.process.kill("SIGTERM");
   await new Promise<void>((resolve) => {
@@ -251,8 +323,10 @@ export async function stopApp(appId: string): Promise<void> {
 }
 
 export async function restartApp(appId: string): Promise<void> {
-  if (processes.has(appId)) {
+  if (processes.has(appId) || buildProcs.has(appId)) {
     await stopApp(appId);
+    // Brief pause to let cleanup settle
+    await new Promise<void>((r) => setTimeout(r, 500));
   }
   await startApp(appId);
 }
@@ -260,4 +334,3 @@ export async function restartApp(appId: string): Promise<void> {
 export function getProcessStatus(appId: string): boolean {
   return processes.has(appId);
 }
-
