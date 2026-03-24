@@ -26,6 +26,10 @@ import { clsx } from "clsx";
 
 const ADMIN_TOKEN_KEY = "nutterx_admin_token";
 
+// Capture native fetch BEFORE AuthProvider patches window.fetch so admin
+// Authorization headers are never overwritten by the user's access_token.
+const _nativeFetch: typeof fetch = window.fetch.bind(window);
+
 interface AdminStats { totalUsers: number; totalApps: number; pendingResets: number; }
 interface AdminUser { id: string; email: string; phone: string; status: string; appCount: number; createdAt: string; }
 interface PasswordRequest { id: string; email: string; preferredPassword: string; status: string; createdAt: string; }
@@ -33,7 +37,7 @@ interface AdminApp { id: string; name: string; slug: string; repoUrl: string; st
 
 function adminFetch(path: string, options?: RequestInit) {
   const token = sessionStorage.getItem(ADMIN_TOKEN_KEY);
-  return fetch(path, {
+  return _nativeFetch(path, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -125,7 +129,7 @@ export default function Admin() {
     e.preventDefault();
     setIsLoggingIn(true);
     try {
-      const res = await fetch("/api/admin/login", {
+      const res = await _nativeFetch("/api/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, key }),

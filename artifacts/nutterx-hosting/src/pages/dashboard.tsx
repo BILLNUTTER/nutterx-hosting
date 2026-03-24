@@ -31,21 +31,26 @@ export default function Dashboard() {
 
       {/* Content */}
       {isLoading ? (
-        <div className="border border-border rounded-xl overflow-hidden bg-card">
-          <div className="px-4 py-3 border-b border-border bg-muted/30 grid grid-cols-[2fr_1fr_2fr_1fr_auto] gap-4">
-            {["App", "Status", "Repository", "Deployed", ""].map((h) => (
-              <span key={h} className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{h}</span>
-            ))}
-          </div>
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="px-4 py-4 border-b border-border/50 last:border-0 grid grid-cols-[2fr_1fr_2fr_1fr_auto] gap-4 items-center">
-              <Skeleton className="h-4 w-28" />
-              <Skeleton className="h-5 w-16" />
-              <Skeleton className="h-4 w-40" />
-              <Skeleton className="h-4 w-20" />
-              <Skeleton className="h-8 w-16" />
-            </div>
-          ))}
+        <div className="border border-border rounded-xl bg-card overflow-x-auto">
+          <table className="w-full min-w-[560px] border-collapse">
+            <thead>
+              <tr className="border-b border-border bg-muted/30">
+                {["App Name", "Status", "Date Deployed", ""].map((h) => (
+                  <th key={h} className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wider px-5 py-2.5">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[1, 2, 3].map((i) => (
+                <tr key={i} className="border-b border-border/50 last:border-0">
+                  <td className="px-5 py-4"><Skeleton className="h-4 w-36" /></td>
+                  <td className="px-5 py-4"><Skeleton className="h-5 w-16" /></td>
+                  <td className="px-5 py-4"><Skeleton className="h-4 w-32" /></td>
+                  <td className="px-5 py-4"><Skeleton className="h-7 w-16" /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : error ? (
         <div className="p-6 bg-destructive/10 border border-destructive/20 rounded-xl flex items-start gap-4">
@@ -56,51 +61,63 @@ export default function Dashboard() {
           </div>
         </div>
       ) : apps && apps.length > 0 ? (
-        <div className="border border-border rounded-xl overflow-hidden bg-card shadow-sm">
-          {/* Table header */}
-          <div className="hidden md:grid grid-cols-[minmax(180px,2fr)_130px_160px_90px] gap-4 px-5 py-2.5 border-b border-border bg-muted/30">
-            {["App Name", "Status", "Date Deployed", ""].map((h) => (
-              <span key={h} className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{h}</span>
-            ))}
-          </div>
+        <div className="border border-border rounded-xl bg-card shadow-sm overflow-x-auto">
+          <table className="w-full min-w-[560px] border-collapse">
+            {/* Table header */}
+            <thead>
+              <tr className="border-b border-border bg-muted/30">
+                {["App Name", "Status", "Date Deployed", ""].map((h) => (
+                  <th key={h} className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wider px-5 py-2.5 first:rounded-tl-xl last:rounded-tr-xl">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {apps.map((app) => (
+                <tr
+                  key={app.id}
+                  className="group border-b border-border/40 last:border-0 hover:bg-white/[0.02] transition-colors"
+                >
+                  {/* Name */}
+                  <td className="px-5 py-3.5">
+                    <Link href={`/apps/${app.id}`}>
+                      <div className="flex items-center gap-3 cursor-pointer">
+                        <div className="w-8 h-8 rounded bg-primary/10 border border-primary/15 flex items-center justify-center flex-shrink-0">
+                          <span className="text-primary font-bold text-xs uppercase">{app.name.slice(0, 2)}</span>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-medium text-sm group-hover:text-primary transition-colors truncate">{app.name}</p>
+                          <p className="text-[11px] text-muted-foreground font-mono">{app.slug}</p>
+                        </div>
+                      </div>
+                    </Link>
+                  </td>
 
-          {/* Table rows */}
-          {apps.map((app) => (
-            <div
-              key={app.id}
-              className="group flex flex-col md:grid md:grid-cols-[minmax(180px,2fr)_130px_160px_90px] gap-3 md:gap-4 items-start md:items-center px-5 py-3.5 border-b border-border/40 last:border-0 hover:bg-white/[0.02] transition-colors"
-            >
-              {/* Name */}
-              <Link href={`/apps/${app.id}`}>
-                <div className="flex items-center gap-3 cursor-pointer">
-                  <div className="w-8 h-8 rounded bg-primary/10 border border-primary/15 flex items-center justify-center flex-shrink-0">
-                    <span className="text-primary font-bold text-xs uppercase">{app.name.slice(0, 2)}</span>
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-medium text-sm group-hover:text-primary transition-colors truncate">{app.name}</p>
-                    <p className="text-[11px] text-muted-foreground font-mono">{app.slug}</p>
-                  </div>
-                </div>
-              </Link>
+                  {/* Status */}
+                  <td className="px-5 py-3.5">
+                    <StatusBadge status={app.status} />
+                  </td>
 
-              {/* Status */}
-              <StatusBadge status={app.status} />
+                  {/* Date deployed */}
+                  <td className="px-5 py-3.5 text-sm text-muted-foreground whitespace-nowrap">
+                    {app.lastDeployedAt
+                      ? format(new Date(app.lastDeployedAt), "MMM d, yyyy HH:mm")
+                      : <span className="italic text-muted-foreground/50">Never deployed</span>}
+                  </td>
 
-              {/* Date deployed */}
-              <span className="text-sm text-muted-foreground">
-                {app.lastDeployedAt
-                  ? format(new Date(app.lastDeployedAt), "MMM d, yyyy HH:mm")
-                  : <span className="italic text-muted-foreground/50">Never deployed</span>}
-              </span>
-
-              {/* Action */}
-              <Link href={`/apps/${app.id}`}>
-                <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground hover:text-primary gap-0.5 px-2">
-                  Manage <ChevronRight className="w-3.5 h-3.5" />
-                </Button>
-              </Link>
-            </div>
-          ))}
+                  {/* Action */}
+                  <td className="px-5 py-3.5">
+                    <Link href={`/apps/${app.id}`}>
+                      <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground hover:text-primary gap-0.5 px-2">
+                        Manage <ChevronRight className="w-3.5 h-3.5" />
+                      </Button>
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : (
         /* Empty state */
