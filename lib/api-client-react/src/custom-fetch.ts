@@ -362,7 +362,16 @@ export async function customFetch<T = unknown>(
 
   const requestInfo = { method, url: resolveUrl(input) };
 
-  const response = await fetch(input, { ...init, method, headers });
+  // Apply a default 15-second timeout so requests never hang indefinitely.
+  // Callers can override by passing their own signal.
+  const timeoutSignal = AbortSignal.timeout(15_000);
+  const signal = init.signal
+    ? (AbortSignal as any).any
+      ? (AbortSignal as any).any([init.signal, timeoutSignal])
+      : init.signal
+    : timeoutSignal;
+
+  const response = await fetch(input, { ...init, method, headers, signal });
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);

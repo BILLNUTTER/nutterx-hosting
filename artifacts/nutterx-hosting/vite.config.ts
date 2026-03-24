@@ -47,6 +47,15 @@ export default defineConfig({
     port,
     host: "0.0.0.0",
     allowedHosts: true,
+    // In dev, forward /api/* to the API server so relative URLs work the same
+    // as in production (where Express serves both the API and static frontend).
+    proxy: {
+      "/api": {
+        target: `http://127.0.0.1:${process.env.API_PORT ?? 8080}`,
+        changeOrigin: true,
+        secure: false,
+      },
+    },
     fs: {
       strict: true,
       deny: ["**/.*"],
