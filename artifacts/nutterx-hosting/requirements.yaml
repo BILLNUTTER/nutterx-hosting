@@ -1,0 +1,15 @@
+packages:
+  "framer-motion": "Page transitions and animated multi-step forms"
+  "date-fns": "Human-readable date formatting for logs and timestamps"
+  "@microsoft/fetch-event-source": "For SSE with Authorization Bearer header support"
+  "clsx": "Utility for constructing className strings conditionally"
+  "tailwind-merge": "Utility function to efficiently merge Tailwind CSS classes"
+
+images:
+  - path: "artifacts/nutterx-hosting/public/images/terminal-bg.png"
+    description: "Dark glowing abstract mesh background with terminal green and neon cyan accents, professional developer aesthetic"
+    aspect_ratio: "16:9"
+
+notes:
+  - Assuming customFetch doesn't handle JWT tokens automatically, so providing useAuth wrapper
+  - Using @microsoft/fetch-event-source to pass JWT token headers to SSE endpoint

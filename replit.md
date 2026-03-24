@@ -2,7 +2,7 @@
 
 ## Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+pnpm workspace monorepo using TypeScript. This is **Nutterx Hosting** — a Heroku-style web platform for deploying any GitHub repository as a Node.js child process.
 
 ## Stack
 
@@ -11,73 +11,82 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **Package manager**: pnpm
 - **TypeScript version**: 5.9
 - **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
+- **Database**: MongoDB Atlas (Mongoose), URI in `MONGODB_URI` env var
+- **Auth**: JWT (access token 15m, refresh token 7d). Secrets: `JWT_SECRET`, `JWT_REFRESH_SECRET`
+- **Validation**: Zod (`zod/v4`)
 - **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+- **Build**: esbuild (ESM bundle for api-server)
 
 ## Structure
 
 ```text
-artifacts-monorepo/
-├── artifacts/              # Deployable applications
-│   └── api-server/         # Express API server
-├── lib/                    # Shared libraries
-│   ├── api-spec/           # OpenAPI spec + Orval codegen config
-│   ├── api-client-react/   # Generated React Query hooks
+workspace/
+├── artifacts/
+│   ├── api-server/         # Express 5 API (auth, apps, process management)
+│   ├── nutterx-hosting/    # React + Vite frontend (deployed at /)
+│   └── mockup-sandbox/     # Component preview server (design tool)
+├── lib/
+│   ├── api-spec/           # OpenAPI spec (openapi.yaml) + Orval codegen config
+│   ├── api-client-react/   # Generated React Query hooks (import from "@workspace/api-client-react")
 │   ├── api-zod/            # Generated Zod schemas from OpenAPI
-│   └── db/                 # Drizzle ORM schema + DB connection
-├── scripts/                # Utility scripts (single workspace package)
-│   └── src/                # Individual .ts scripts, run via `pnpm --filter @workspace/scripts run <script>`
-├── pnpm-workspace.yaml     # pnpm workspace (artifacts/*, lib/*, lib/integrations/*, scripts)
+│   └── mongo/              # Mongoose connection + User, App, Log models
+├── scripts/                # Utility scripts
+├── pnpm-workspace.yaml
 ├── tsconfig.base.json      # Shared TS options (composite, bundler resolution, es2022)
 ├── tsconfig.json           # Root TS project references
-└── package.json            # Root package with hoisted devDeps
+└── package.json
 ```
 
 ## TypeScript & Composite Projects
 
-Every package extends `tsconfig.base.json` which sets `composite: true`. The root `tsconfig.json` lists all packages as project references. This means:
+Every package extends `tsconfig.base.json` which sets `composite: true`. The root `tsconfig.json` lists all packages as project references.
 
-- **Always typecheck from the root** — run `pnpm run typecheck` (which runs `tsc --build --emitDeclarationOnly`). This builds the full dependency graph so that cross-package imports resolve correctly. Running `tsc` inside a single package will fail if its dependencies haven't been built yet.
-- **`emitDeclarationOnly`** — we only emit `.d.ts` files during typecheck; actual JS bundling is handled by esbuild/tsx/vite...etc, not `tsc`.
-- **Project references** — when package A depends on package B, A's `tsconfig.json` must list B in its `references` array. `tsc --build` uses this to determine build order and skip up-to-date packages.
+- **Always typecheck from the root** — run `pnpm run typecheck`
+- **`emitDeclarationOnly`** — only emit `.d.ts` files during typecheck; bundling done by esbuild/vite
+- **Project references** — list dependencies in `tsconfig.json` `references` array
 
 ## Root Scripts
 
-- `pnpm run build` — runs `typecheck` first, then recursively runs `build` in all packages that define it
+- `pnpm run build` — runs `typecheck` first, then recursively runs `build` in all packages
 - `pnpm run typecheck` — runs `tsc --build --emitDeclarationOnly` using project references
 
 ## Packages
 
 ### `artifacts/api-server` (`@workspace/api-server`)
 
-Express 5 API server. Routes live in `src/routes/` and use `@workspace/api-zod` for request and response validation and `@workspace/db` for persistence.
+Express 5 API server. Auth routes + apps routes + process manager.
 
-- Entry: `src/index.ts` — reads `PORT`, starts Express
-- App setup: `src/app.ts` — mounts CORS, JSON/urlencoded parsing, routes at `/api`
-- Routes: `src/routes/index.ts` mounts sub-routers; `src/routes/health.ts` exposes `GET /health` (full path: `/api/health`)
-- Depends on: `@workspace/db`, `@workspace/api-zod`
-- `pnpm --filter @workspace/api-server run dev` — run the dev server
-- `pnpm --filter @workspace/api-server run build` — production esbuild bundle (`dist/index.cjs`)
-- Build bundles an allowlist of deps (express, cors, pg, drizzle-orm, zod, etc.) and externalizes the rest
+- Entry: `src/index.ts` — reads `PORT` (default 8080), starts Express
+- App setup: `src/app.ts` — CORS, JSON, routes at `/api`
+- Routes: `src/routes/auth.ts` (signup/login/refresh/logout/me), `src/routes/apps.ts` (full CRUD, start/stop/restart, SSE log stream, env vars, env template)
+- Services: `src/services/processManager.ts` — git clone → install → spawn, auto-restart (5x, exponential backoff), log to MongoDB capped collection
+- Middleware: `src/middlewares/auth.ts` — JWT Bearer token verification
+- Depends on: `@workspace/mongo`, `@workspace/api-zod`, `mongoose` (direct dep)
+- `pnpm --filter @workspace/api-server run dev` — build + start
+- `pnpm --filter @workspace/api-server run build` — esbuild ESM bundle → `dist/index.mjs`
 
-### `lib/db` (`@workspace/db`)
+### `artifacts/nutterx-hosting` (`@workspace/nutterx-hosting`)
 
-Database layer using Drizzle ORM with PostgreSQL. Exports a Drizzle client instance and schema models.
+React + Vite frontend. Dark terminal-themed UI.
 
-- `src/index.ts` — creates a `Pool` + Drizzle instance, exports schema
-- `src/schema/index.ts` — barrel re-export of all models
-- `src/schema/<modelname>.ts` — table definitions with `drizzle-zod` insert schemas (no models definitions exist right now)
-- `drizzle.config.ts` — Drizzle Kit config (requires `DATABASE_URL`, automatically provided by Replit)
-- Exports: `.` (pool, db, schema), `./schema` (schema only)
+- Pages: login, dashboard (list apps), new-app (create + env template), app-detail (logs, start/stop/restart, env vars)
+- Auth: JWT stored in localStorage (`access_token`, `refresh_token`); `setAuthTokenGetter` wires tokens into generated fetch client
+- Hooks: `use-auth.tsx` (auth context), `use-log-stream.tsx` (SSE log streaming via `@microsoft/fetch-event-source`)
+- Import API hooks from `@workspace/api-client-react` (barrel export, NOT deep path imports)
+- Port: reads `PORT` env var (25013 in dev)
 
-Production migrations are handled by Replit when publishing. In development, we just use `pnpm --filter @workspace/db run push`, and we fallback to `pnpm --filter @workspace/db run push-force`.
+### `lib/mongo` (`@workspace/mongo`)
+
+Mongoose connection + models.
+
+- `src/index.ts` — `connectMongo()`, exports `User`, `App`, `Log` models
+- `User` model: email, password (bcrypt), refreshTokens[]
+- `App` model: name, slug, repoUrl, branch, status enum (idle/installing/running/stopped/crashed/error), envVars, startCommand, installCommand, port, autoRestart, errorMessage
+- `Log` model: capped collection (10MB), appId, line, stream (stdout/stderr), timestamp
 
 ### `lib/api-spec` (`@workspace/api-spec`)
 
-Owns the OpenAPI 3.1 spec (`openapi.yaml`) and the Orval config (`orval.config.ts`). Running codegen produces output into two sibling packages:
-
+Owns the OpenAPI 3.1 spec (`openapi.yaml`) and Orval config. Running codegen produces:
 1. `lib/api-client-react/src/generated/` — React Query hooks + fetch client
 2. `lib/api-zod/src/generated/` — Zod schemas
 
@@ -85,12 +94,33 @@ Run codegen: `pnpm --filter @workspace/api-spec run codegen`
 
 ### `lib/api-zod` (`@workspace/api-zod`)
 
-Generated Zod schemas from the OpenAPI spec (e.g. `HealthCheckResponse`). Used by `api-server` for response validation.
+Generated Zod schemas from OpenAPI spec. Used by `api-server` for response validation.
 
 ### `lib/api-client-react` (`@workspace/api-client-react`)
 
-Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHealthCheck`, `healthCheck`).
+Generated React Query hooks. Import ONLY from `@workspace/api-client-react` (not deep paths like `/src/generated/api`).
+
+Exports: all hooks, schemas, `setBaseUrl`, `setAuthTokenGetter`.
+
+### `lib/db` (`@workspace/db`)
+
+NOT USED. Drizzle ORM was removed from this project; MongoDB via `@workspace/mongo` is used instead.
 
 ### `scripts` (`@workspace/scripts`)
 
-Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
+Utility scripts. Run via `pnpm --filter @workspace/scripts run <script>`.
+
+## Environment Variables
+
+- `MONGODB_URI` — MongoDB Atlas connection string
+- `JWT_SECRET` — JWT access token secret
+- `JWT_REFRESH_SECRET` — JWT refresh token secret
+- `PORT` — assigned per artifact by Replit
+
+## Deployment Notes
+
+- Apps are deployed as Node.js child processes (no Docker/containers)
+- Each app is cloned to `~/.nutterx-apps/<slug>/`
+- Auto-detects npm/yarn/pnpm package manager
+- Supports up to 5 auto-restarts with exponential backoff
+- Logs streamed via SSE using MongoDB change streams on capped `logs` collection
