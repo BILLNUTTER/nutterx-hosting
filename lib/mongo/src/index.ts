@@ -19,9 +19,6 @@ export function connectMongo(): Promise<void> {
       serverSelectionTimeoutMS: 15000,
       connectTimeoutMS: 10000,
       socketTimeoutMS: 45000,
-      // Explicit TLS — Atlas always requires it; being explicit prevents
-      // driver versions from downgrading to a plaintext attempt on error.
-      tls: true,
       // Pool of 10 allows auth/app routes to get connections even while
       // background log writes are in flight.  Each connection ~1-2 MB.
       maxPoolSize: 10,
