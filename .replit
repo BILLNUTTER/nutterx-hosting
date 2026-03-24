@@ -28,7 +28,3 @@ timeoutMs = 20000
 [userenv]
 
 [userenv.shared]
-MONGODB_URI = "mongodb+srv://admin:admin@whatsapp-cluster.38vq8k0.mongodb.net/hosting"
-JWT_SECRET = "61d04399392d7d5a99054abe041b5bebdbd0dd304e04ee024e847fe7caa31ad257b745d69a7eccdffda21da2a139f1435b779531c0bf394dfe4ba1215198274f"
-JWT_REFRESH_SECRET = "ce2541d07496d83a50d2d3758c013cd75b2c503e36d621f8f8963a59b9b70df5c4c7ce2091a194bc1eea7c44df7c8265356cd819dace64d69aa2bd9e2a345676"
-ENCRYPTION_KEY = "ef7cbc1b1f2e021aa9ee75fecd47f236385976d7f30eb4bec44649b00bf25e2b"
