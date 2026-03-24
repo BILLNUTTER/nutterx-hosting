@@ -1,18 +1,29 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Terminal, ArrowRight, Loader2, Github } from "lucide-react";
+import { Terminal, ArrowRight, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 export default function Login() {
-  const [isLogin, setIsLogin] = useState(true);
+  const [, location] = useLocation();
+  const searchParams = new URLSearchParams(
+    typeof window !== "undefined" ? window.location.search : ""
+  );
+  const [isLogin, setIsLogin] = useState(searchParams.get("tab") !== "signup");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
-  const { login, signup } = useAuth();
+
+  const { login, signup, user } = useAuth();
+  const [, setLocation] = useLocation();
+
+  // Redirect if already logged in
+  useEffect(() => {
+    if (user) setLocation("/dashboard");
+  }, [user, setLocation]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,7 +34,7 @@ export default function Login() {
       } else {
         await signup({ email, password });
       }
-    } catch (err) {
+    } catch {
       // Handled by AuthProvider toast
     } finally {
       setIsSubmitting(false);
@@ -32,103 +43,156 @@ export default function Login() {
 
   return (
     <div className="min-h-screen flex bg-background relative overflow-hidden">
-      {/* Background image half */}
-      <div className="hidden lg:block lg:flex-1 relative">
-        <div className="absolute inset-0 bg-gradient-to-r from-background to-transparent z-10" />
-        <img 
-          className="absolute inset-0 h-full w-full object-cover opacity-60" 
-          src={`${import.meta.env.BASE_URL}images/terminal-bg.png`} 
-          alt="Terminal Background" 
-        />
-        <div className="absolute inset-0 flex items-center justify-center z-20 px-20">
-          <div className="space-y-6 max-w-lg">
-            <h1 className="text-5xl font-bold tracking-tight text-white">Deploy anything in seconds.</h1>
-            <p className="text-lg text-zinc-400 font-mono">Push your code. We handle the containers, routing, and logs.</p>
-            <div className="flex gap-4">
-              <div className="h-1 w-20 bg-primary rounded-full shadow-[0_0_10px_rgba(var(--primary),0.8)]" />
-              <div className="h-1 w-12 bg-white/20 rounded-full" />
-              <div className="h-1 w-12 bg-white/20 rounded-full" />
+      {/* Left panel */}
+      <div className="hidden lg:flex lg:flex-1 flex-col justify-center px-16 bg-card border-r border-border relative overflow-hidden">
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[400px] bg-primary/8 blur-[140px] rounded-full" />
+          <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:48px_48px]" />
+        </div>
+
+        <div className="relative z-10 space-y-8 max-w-md">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-xl bg-primary/10 border border-primary/25 flex items-center justify-center">
+              <Terminal className="w-6 h-6 text-primary" />
             </div>
+            <div>
+              <span className="font-bold text-xl tracking-tight">Nutterx</span>
+              <span className="ml-2 text-[9px] font-mono text-primary uppercase tracking-widest bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded-full">Hosting</span>
+            </div>
+          </div>
+
+          <div>
+            <h1 className="text-4xl font-extrabold tracking-tight leading-tight">
+              Deploy any GitHub repo.<br />
+              <span className="text-primary">No DevOps required.</span>
+            </h1>
+            <p className="mt-4 text-muted-foreground leading-relaxed">
+              Paste a GitHub URL, configure env vars, and stream real-time logs — all from your browser.
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            {[
+              "Clone → Install → Run, automatically",
+              "Real-time log streaming via SSE",
+              "Encrypted environment variables",
+              "Multi-user, isolated workspaces",
+              "Auto-restart on crashes",
+            ].map((item) => (
+              <div key={item} className="flex items-center gap-3 text-sm text-muted-foreground">
+                <div className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
+                {item}
+              </div>
+            ))}
           </div>
         </div>
       </div>
 
-      {/* Form half */}
-      <div className="flex-1 flex flex-col justify-center px-4 sm:px-6 lg:flex-none lg:w-[600px] z-20">
-        <div className="mx-auto w-full max-w-md bg-card/50 backdrop-blur-xl border border-white/5 p-8 rounded-3xl shadow-2xl">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center border border-primary/30 shadow-[0_0_20px_rgba(var(--primary),0.3)]">
-              <Terminal className="w-6 h-6 text-primary" />
+      {/* Right form panel */}
+      <div className="flex-1 flex flex-col justify-center px-4 sm:px-8 lg:max-w-[560px] relative z-10">
+        <div className="w-full max-w-md mx-auto">
+          {/* Mobile brand */}
+          <div className="flex items-center gap-2.5 mb-10 lg:hidden">
+            <div className="w-9 h-9 rounded-lg bg-primary/10 border border-primary/25 flex items-center justify-center">
+              <Terminal className="w-4 h-4 text-primary" />
             </div>
-            <div>
-              <h2 className="text-2xl font-bold">Nutterx</h2>
-              <p className="text-xs font-mono text-primary uppercase tracking-widest">Hosting Console</p>
-            </div>
+            <span className="font-bold text-lg">Nutterx Hosting</span>
           </div>
 
-          <h3 className="text-2xl font-semibold mb-2">
-            {isLogin ? "Welcome back" : "Create your account"}
-          </h3>
-          <p className="text-muted-foreground mb-8">
-            {isLogin ? "Enter your credentials to access your terminal." : "Start deploying your apps today."}
-          </p>
-
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email Address</Label>
-              <Input 
-                id="email" 
-                type="email" 
-                placeholder="developer@example.com" 
-                required 
-                className="h-12 bg-black/40 border-white/10 focus-visible:border-primary/50 focus-visible:ring-primary/20 transition-all"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-              />
-            </div>
-            
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="password">Password</Label>
-                {isLogin && <a href="#" className="text-xs text-primary hover:underline">Forgot password?</a>}
-              </div>
-              <Input 
-                id="password" 
-                type="password" 
-                placeholder="••••••••" 
-                required 
-                minLength={8}
-                className="h-12 bg-black/40 border-white/10 focus-visible:border-primary/50 focus-visible:ring-primary/20 transition-all"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-              />
-            </div>
-
-            <Button 
-              type="submit" 
-              className="w-full h-12 text-base font-medium shadow-lg shadow-primary/25 hover:shadow-primary/40 transition-all group"
-              disabled={isSubmitting}
+          {/* Toggle */}
+          <div className="flex bg-card border border-border rounded-xl p-1 mb-8">
+            <button
+              onClick={() => setIsLogin(true)}
+              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all ${isLogin ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
             >
-              {isSubmitting ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <>
-                  {isLogin ? "Sign In" : "Sign Up"}
-                  <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
-                </>
-              )}
-            </Button>
-          </form>
-
-          <div className="mt-8 text-center">
-            <button 
-              type="button" 
-              onClick={() => setIsLogin(!isLogin)}
-              className="text-sm text-muted-foreground hover:text-primary transition-colors"
+              Sign In
+            </button>
+            <button
+              onClick={() => setIsLogin(false)}
+              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all ${!isLogin ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
             >
-              {isLogin ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
+              Create Account
             </button>
           </div>
+
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={isLogin ? "login" : "signup"}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.15 }}
+            >
+              <div className="mb-6">
+                <h2 className="text-2xl font-bold tracking-tight">
+                  {isLogin ? "Welcome back" : "Create your account"}
+                </h2>
+                <p className="text-muted-foreground text-sm mt-1">
+                  {isLogin
+                    ? "Sign in to manage your deployed applications."
+                    : "Start deploying apps in seconds. It's free."}
+                </p>
+              </div>
+
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="email">Email address</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="you@example.com"
+                    required
+                    className="h-11 bg-card border-border focus-visible:border-primary/50 focus-visible:ring-primary/20"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    placeholder="••••••••"
+                    required
+                    minLength={8}
+                    className="h-11 bg-card border-border focus-visible:border-primary/50 focus-visible:ring-primary/20"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                  {!isLogin && (
+                    <p className="text-xs text-muted-foreground">Minimum 8 characters.</p>
+                  )}
+                </div>
+
+                <Button
+                  type="submit"
+                  className="w-full h-11 text-sm font-medium shadow-lg shadow-primary/20 group"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      {isLogin ? "Sign In" : "Create Account"}
+                      <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-0.5 transition-transform" />
+                    </>
+                  )}
+                </Button>
+              </form>
+
+              <p className="mt-6 text-center text-sm text-muted-foreground">
+                {isLogin ? "Don't have an account? " : "Already have an account? "}
+                <button
+                  type="button"
+                  onClick={() => setIsLogin(!isLogin)}
+                  className="text-primary hover:underline font-medium"
+                >
+                  {isLogin ? "Sign up free" : "Sign in"}
+                </button>
+              </p>
+            </motion.div>
+          </AnimatePresence>
         </div>
       </div>
     </div>

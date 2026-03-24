@@ -1,122 +1,142 @@
 import { AppLayout } from "@/components/AppLayout";
 import { useListApps } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/StatusBadge";
 import { format } from "date-fns";
-import { Rocket, Plus, Terminal, RefreshCw, AlertCircle, Link2, Github } from "lucide-react";
+import { Plus, AlertCircle, Github, ArrowRight, Rocket, Clock, ChevronRight } from "lucide-react";
 import { Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
-import { motion } from "framer-motion";
 
 export default function Dashboard() {
   const { data: apps, isLoading, error } = useListApps({
-    query: { refetchInterval: 5000 } // Poll for status changes
+    query: { refetchInterval: 5000 },
   });
 
   return (
     <AppLayout>
+      {/* Page header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground mt-1">Manage your deployed applications</p>
+          <h1 className="text-2xl font-bold tracking-tight">Applications</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            {apps ? `${apps.length} app${apps.length !== 1 ? "s" : ""} deployed` : "Manage your deployed applications"}
+          </p>
         </div>
         <Link href="/apps/new">
-          <Button size="lg" className="shadow-lg shadow-primary/20 gap-2">
-            <Plus className="w-5 h-5" />
-            Deploy App
+          <Button className="gap-2 shadow-lg shadow-primary/20">
+            <Plus className="w-4 h-4" /> Deploy New App
           </Button>
         </Link>
       </div>
 
+      {/* Content */}
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[1, 2, 3].map(i => (
-            <Card key={i} className="p-6 space-y-4">
-              <Skeleton className="h-6 w-1/2" />
-              <Skeleton className="h-4 w-1/3" />
-              <Skeleton className="h-10 w-full mt-4" />
-            </Card>
+        <div className="border border-border rounded-xl overflow-hidden bg-card">
+          <div className="px-4 py-3 border-b border-border bg-muted/30 grid grid-cols-[2fr_1fr_2fr_1fr_auto] gap-4">
+            {["App", "Status", "Repository", "Deployed", ""].map((h) => (
+              <span key={h} className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{h}</span>
+            ))}
+          </div>
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="px-4 py-4 border-b border-border/50 last:border-0 grid grid-cols-[2fr_1fr_2fr_1fr_auto] gap-4 items-center">
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-5 w-16" />
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-8 w-16" />
+            </div>
           ))}
         </div>
       ) : error ? (
         <div className="p-6 bg-destructive/10 border border-destructive/20 rounded-xl flex items-start gap-4">
-          <AlertCircle className="w-6 h-6 text-destructive flex-shrink-0" />
+          <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
           <div>
-            <h3 className="text-lg font-medium text-destructive">Failed to load apps</h3>
-            <p className="text-destructive/80 text-sm">Please try refreshing the page.</p>
+            <h3 className="font-medium text-destructive">Failed to load applications</h3>
+            <p className="text-destructive/80 text-sm mt-0.5">Please refresh the page and try again.</p>
           </div>
         </div>
       ) : apps && apps.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="border border-border rounded-xl overflow-hidden bg-card shadow-sm">
+          {/* Table header */}
+          <div className="hidden md:grid grid-cols-[minmax(160px,2fr)_120px_minmax(180px,2fr)_140px_80px] gap-4 px-5 py-3 border-b border-border bg-muted/20">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">App Name</span>
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</span>
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Repository</span>
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Last Deploy</span>
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider"></span>
+          </div>
+
+          {/* Table rows */}
           {apps.map((app, i) => (
-            <motion.div 
-              key={app.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
-            >
-              <Card className="group flex flex-col h-full bg-card hover:bg-card/80 border-border hover:border-primary/50 transition-all duration-300 shadow-sm hover:shadow-xl hover:shadow-primary/5 overflow-hidden">
-                <div className="p-6 flex-1">
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="w-12 h-12 rounded-lg bg-black/50 border border-white/5 flex items-center justify-center shadow-inner">
-                      <Terminal className="w-6 h-6 text-primary/80" />
-                    </div>
-                    <StatusBadge status={app.status} />
+            <Link key={app.id} href={`/apps/${app.id}`}>
+              <div className={`group flex flex-col md:grid md:grid-cols-[minmax(160px,2fr)_120px_minmax(180px,2fr)_140px_80px] gap-3 md:gap-4 items-start md:items-center px-5 py-4 hover:bg-white/[0.03] cursor-pointer transition-colors border-b border-border/50 last:border-0 ${i === 0 ? "" : ""}`}>
+                {/* Name */}
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
+                    <span className="text-primary font-bold text-xs uppercase">{app.name.slice(0, 2)}</span>
                   </div>
-                  
-                  <h3 className="text-xl font-bold truncate" title={app.name}>{app.name}</h3>
-                  
-                  <div className="mt-4 space-y-2">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Link2 className="w-4 h-4" />
-                      <a href={`https://${app.slug}.nutterxhost.com`} target="_blank" rel="noreferrer" className="hover:text-primary hover:underline truncate">
-                        {app.slug}.nutterxhost.com
-                      </a>
-                    </div>
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Github className="w-4 h-4" />
-                      <a href={app.repoUrl} target="_blank" rel="noreferrer" className="hover:text-foreground hover:underline truncate">
-                        {app.repoUrl.replace('https://github.com/', '')}
-                      </a>
-                    </div>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-sm truncate group-hover:text-primary transition-colors">{app.name}</p>
+                    <p className="text-xs text-muted-foreground font-mono truncate">{app.slug}</p>
                   </div>
                 </div>
-                
-                <div className="px-6 py-4 bg-black/20 border-t border-white/5 flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground font-mono flex items-center gap-1.5">
-                    <RefreshCw className="w-3 h-3" />
-                    {app.lastDeployedAt ? format(new Date(app.lastDeployedAt), 'MMM d, HH:mm') : 'Never'}
+
+                {/* Status */}
+                <div className="md:block">
+                  <StatusBadge status={app.status} />
+                </div>
+
+                {/* Repo */}
+                <div className="flex items-center gap-2 min-w-0 text-sm text-muted-foreground">
+                  <Github className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="truncate text-xs font-mono">
+                    {app.repoUrl.replace("https://github.com/", "")}
                   </span>
-                  <Link href={`/apps/${app.id}`}>
-                    <Button variant="secondary" size="sm" className="bg-white/5 hover:bg-white/10 text-white">
-                      Manage
-                    </Button>
-                  </Link>
                 </div>
-              </Card>
-            </motion.div>
+
+                {/* Last deployed */}
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>
+                    {app.lastDeployedAt
+                      ? format(new Date(app.lastDeployedAt), "MMM d, HH:mm")
+                      : "Never"}
+                  </span>
+                </div>
+
+                {/* Action */}
+                <div className="flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 text-xs text-muted-foreground hover:text-primary gap-1 px-2"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Link href={`/apps/${app.id}`}>
+                      <span className="flex items-center gap-1">Manage <ChevronRight className="w-3.5 h-3.5" /></span>
+                    </Link>
+                  </Button>
+                </div>
+              </div>
+            </Link>
           ))}
         </div>
       ) : (
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="text-center py-24 bg-card border border-border/50 rounded-2xl shadow-xl shadow-black/20"
-        >
-          <div className="w-20 h-20 bg-primary/10 text-primary rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-inner border border-primary/20">
-            <Rocket className="w-10 h-10" />
+        /* Empty state */
+        <div className="text-center py-24 bg-card border border-border/50 rounded-xl">
+          <div className="w-16 h-16 bg-primary/10 text-primary rounded-xl flex items-center justify-center mx-auto mb-5 border border-primary/20">
+            <Rocket className="w-8 h-8" />
           </div>
-          <h3 className="text-2xl font-bold text-foreground">No apps deployed yet</h3>
-          <p className="mt-2 text-muted-foreground max-w-sm mx-auto mb-8">
-            Connect your GitHub repository and deploy your first application in minutes.
+          <h3 className="text-xl font-bold">No apps deployed yet</h3>
+          <p className="mt-2 text-muted-foreground text-sm max-w-sm mx-auto mb-7">
+            Connect any GitHub repository and deploy your first application in seconds.
           </p>
           <Link href="/apps/new">
-            <Button size="lg" className="rounded-xl px-8 shadow-lg shadow-primary/20 hover:shadow-primary/30 transition-all font-semibold">
-              Deploy New App
+            <Button className="gap-2 shadow-lg shadow-primary/20">
+              <Plus className="w-4 h-4" /> Deploy Your First App
             </Button>
           </Link>
-        </motion.div>
+        </div>
       )}
     </AppLayout>
   );

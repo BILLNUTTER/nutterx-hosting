@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { Play, Square, RefreshCw, Trash2, Terminal, Settings, ArrowLeft, Loader2, Save, Trash, AlertCircle, Pencil, X } from "lucide-react";
@@ -64,6 +64,8 @@ export default function AppDetail() {
   // Env vars state — only sync from server when NOT actively editing
   const [isEditingEnv, setIsEditingEnv] = useState(false);
   const [envForm, setEnvForm] = useState<{key: string, value: string}[]>([]);
+  const [deleteConfirmName, setDeleteConfirmName] = useState("");
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
   useEffect(() => {
     // Don't clobber the form while user is editing — they clicked Edit explicitly
@@ -84,6 +86,7 @@ export default function AppDetail() {
   };
 
   const handleDelete = async () => {
+    if (deleteConfirmName !== app?.name) return;
     try {
       await deleteApp({ id: id! });
       toast({ title: "App deleted successfully" });
@@ -334,25 +337,58 @@ export default function AppDetail() {
               </Card>
 
               <Card className="p-6 border-destructive/20 bg-destructive/5">
-                <h3 className="text-lg font-bold text-destructive mb-2">Danger Zone</h3>
-                <p className="text-sm text-muted-foreground mb-6">Irreversible actions for this application.</p>
-                
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <Button variant="destructive" className="gap-2">
-                      <Trash2 className="w-4 h-4" /> Delete Application
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent className="border-destructive/20">
+                <h3 className="text-lg font-bold text-destructive mb-1">Danger Zone</h3>
+                <p className="text-sm text-muted-foreground mb-6">These actions are permanent and cannot be undone.</p>
+
+                <div className="border border-destructive/20 rounded-lg p-4 flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium">Delete this application</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Removes the app, all logs, and configuration permanently.</p>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="flex-shrink-0 gap-2"
+                    onClick={() => { setDeleteConfirmName(""); setIsDeleteDialogOpen(true); }}
+                  >
+                    <Trash2 className="w-4 h-4" /> Delete App
+                  </Button>
+                </div>
+
+                <Dialog open={isDeleteDialogOpen} onOpenChange={(open) => { setIsDeleteDialogOpen(open); if (!open) setDeleteConfirmName(""); }}>
+                  <DialogContent className="border-destructive/30 sm:max-w-md">
                     <DialogHeader>
-                      <DialogTitle>Are you absolutely sure?</DialogTitle>
-                      <DialogDescription>
-                        This will permanently delete the application <strong>{app.name}</strong> and remove all associated data, logs, and configuration.
+                      <DialogTitle className="text-destructive">Delete application</DialogTitle>
+                      <DialogDescription className="pt-1">
+                        This action <strong>cannot be undone</strong>. This will permanently delete the{" "}
+                        <strong className="text-foreground">{app.name}</strong> application, all its logs, and configuration.
                       </DialogDescription>
                     </DialogHeader>
-                    <DialogFooter className="mt-6">
-                      <Button variant="outline">Cancel</Button>
-                      <Button variant="destructive" onClick={handleDelete}>Yes, Delete App</Button>
+                    <div className="mt-2 space-y-3">
+                      <p className="text-sm text-muted-foreground">
+                        Please type <strong className="font-mono text-foreground">{app.name}</strong> to confirm.
+                      </p>
+                      <Input
+                        placeholder={app.name}
+                        value={deleteConfirmName}
+                        onChange={(e) => setDeleteConfirmName(e.target.value)}
+                        className="font-mono bg-black/30 border-destructive/30 focus-visible:border-destructive/60 focus-visible:ring-destructive/20"
+                        onKeyDown={(e) => e.key === "Enter" && deleteConfirmName === app.name && handleDelete()}
+                        autoFocus
+                      />
+                    </div>
+                    <DialogFooter className="mt-4 gap-2">
+                      <Button variant="outline" onClick={() => { setIsDeleteDialogOpen(false); setDeleteConfirmName(""); }}>
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        disabled={deleteConfirmName !== app.name}
+                        onClick={handleDelete}
+                        className="gap-2"
+                      >
+                        <Trash2 className="w-4 h-4" /> Delete this application
+                      </Button>
                     </DialogFooter>
                   </DialogContent>
                 </Dialog>

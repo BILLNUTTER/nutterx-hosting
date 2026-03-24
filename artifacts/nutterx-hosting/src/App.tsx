@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import NotFound from "@/pages/not-found";
 
 // Page Imports
+import Landing from "@/pages/landing";
 import Login from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
 import NewApp from "@/pages/new-app";
@@ -37,27 +38,10 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
   return <Component />;
 }
 
-function HomeRedirect() {
-  const { user, isLoading } = useAuth();
-  const [, setLocation] = useLocation();
-
-  useEffect(() => {
-    if (!isLoading) {
-      setLocation(user ? "/dashboard" : "/login");
-    }
-  }, [user, isLoading, setLocation]);
-
-  return (
-    <div className="min-h-screen bg-background flex items-center justify-center">
-      <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
-    </div>
-  );
-}
-
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={HomeRedirect} />
+      <Route path="/" component={Landing} />
       <Route path="/login" component={Login} />
       <Route path="/dashboard">
         {() => <ProtectedRoute component={Dashboard} />}
