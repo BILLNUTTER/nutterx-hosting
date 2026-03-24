@@ -95,8 +95,9 @@ export async function startApp(appId: string): Promise<void> {
       ? app.repoUrl.replace("https://", `https://${app.pat}@`)
       : app.repoUrl;
 
-    await writeLog(appId, `Cloning repository: ${app.repoUrl}`, "system");
-    await runCommand("git", ["clone", cloneUrl, appDir], os.homedir(), appId);
+    const branch = app.branch || "main";
+    await writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
+    await runCommand("git", ["clone", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId);
 
     const pm = detectPackageManager(appDir);
     const installCmd = app.installCommand || `${pm} install`;

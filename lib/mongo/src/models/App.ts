@@ -10,6 +10,7 @@ export interface IApp extends Document {
   owner: Types.ObjectId;
   name: string;
   repoUrl: string;
+  branch: string;
   pat?: string;
   slug: string;
   status: AppStatus;
@@ -30,6 +31,7 @@ const appSchema = new Schema<IApp>(
     owner: { type: Schema.Types.ObjectId, ref: "User", required: true },
     name: { type: String, required: true, trim: true },
     repoUrl: { type: String, required: true, trim: true },
+    branch: { type: String, default: "main", trim: true },
     pat: { type: String },
     slug: { type: String, required: true, unique: true, trim: true },
     status: {

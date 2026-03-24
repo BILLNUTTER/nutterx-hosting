@@ -14,6 +14,7 @@ function toApiApp(doc: IApp | null) {
     id: (doc._id as mongoose.Types.ObjectId).toString(),
     name: doc.name,
     repoUrl: doc.repoUrl,
+    branch: doc.branch ?? "main",
     slug: doc.slug,
     status: doc.status,
     autoRestart: doc.autoRestart,
@@ -64,7 +65,7 @@ router.get("/apps", requireAuth, async (req: Request, res: Response) => {
 
 router.get("/apps/env-template", requireAuth, async (req: Request, res: Response) => {
   try {
-    const { repoUrl, pat } = req.query as { repoUrl?: string; pat?: string };
+    const { repoUrl, pat, branch } = req.query as { repoUrl?: string; pat?: string; branch?: string };
     if (!repoUrl) {
       res.status(400).json({ error: "repoUrl is required" });
       return;
@@ -77,13 +78,15 @@ router.get("/apps/env-template", requireAuth, async (req: Request, res: Response
     }
 
     const [, owner, repo] = match;
-    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/main/.env.example`;
-    const fallbackUrl = `https://raw.githubusercontent.com/${owner}/${repo}/master/.env.example`;
-
     const headers: Record<string, string> = pat ? { Authorization: `token ${pat}` } : {};
 
+    const branchesToTry = branch
+      ? [branch, "main", "master"].filter((v, i, a) => a.indexOf(v) === i)
+      : ["main", "master"];
+
     let text: string | null = null;
-    for (const url of [rawUrl, fallbackUrl]) {
+    for (const b of branchesToTry) {
+      const url = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/.env.example`;
       const resp = await fetch(url, { headers });
       if (resp.ok) {
         text = await resp.text();
@@ -98,6 +101,77 @@ router.get("/apps/env-template", requireAuth, async (req: Request, res: Response
 
     const keys = parseEnvExample(text);
     res.json({ keys });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.get("/apps/repo-meta", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { repoUrl, pat, branch } = req.query as { repoUrl?: string; pat?: string; branch?: string };
+    if (!repoUrl) {
+      res.status(400).json({ error: "repoUrl is required" });
+      return;
+    }
+
+    const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/|$)/);
+    if (!match) {
+      res.status(400).json({ error: "Invalid GitHub repository URL" });
+      return;
+    }
+
+    const [, owner, repo] = match;
+    const headers: Record<string, string> = pat ? { Authorization: `token ${pat}` } : {};
+
+    const branchesToTry = branch
+      ? [branch, "main", "master"].filter((v, i, a) => a.indexOf(v) === i)
+      : ["main", "master"];
+
+    let pkgJson: Record<string, unknown> | null = null;
+    for (const b of branchesToTry) {
+      const url = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/package.json`;
+      const resp = await fetch(url, { headers });
+      if (resp.ok) {
+        try {
+          pkgJson = await resp.json() as Record<string, unknown>;
+        } catch {
+          pkgJson = null;
+        }
+        break;
+      }
+    }
+
+    if (!pkgJson) {
+      res.status(404).json({ error: "package.json not found in repository" });
+      return;
+    }
+
+    const scripts = (pkgJson.scripts as Record<string, string> | undefined) ?? {};
+    const startCommand = scripts.start ?? scripts.serve ?? null;
+    const buildCommand = scripts.build ?? null;
+
+    let installCommand: string | null = null;
+    if (pkgJson.packageManager && typeof pkgJson.packageManager === "string") {
+      const pm = (pkgJson.packageManager as string).split("@")[0];
+      installCommand = `${pm} install`;
+    }
+
+    let port: number | null = null;
+    const portSources = [
+      (pkgJson.config as Record<string, unknown> | undefined)?.port,
+      (pkgJson.engines as Record<string, unknown> | undefined)?.port,
+    ];
+    for (const src of portSources) {
+      const n = Number(src);
+      if (!isNaN(n) && n > 0) { port = n; break; }
+    }
+    if (!port && startCommand) {
+      const portMatch = startCommand.match(/PORT[=\s]+(\d+)/);
+      if (portMatch) port = parseInt(portMatch[1], 10);
+    }
+
+    res.json({ startCommand, buildCommand, installCommand, port, scripts: Object.keys(scripts) });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
@@ -138,9 +212,10 @@ function parseEnvExample(content: string) {
 router.post("/apps", requireAuth, async (req: Request, res: Response) => {
   try {
     await connectMongo();
-    const { name, repoUrl, pat, autoRestart, startCommand, installCommand, port } = req.body as {
+    const { name, repoUrl, branch, pat, autoRestart, startCommand, installCommand, port } = req.body as {
       name: string;
       repoUrl: string;
+      branch?: string;
       pat?: string;
       autoRestart?: boolean;
       startCommand?: string;
@@ -159,6 +234,7 @@ router.post("/apps", requireAuth, async (req: Request, res: Response) => {
       owner: new mongoose.Types.ObjectId(req.user!.userId),
       name,
       repoUrl,
+      branch: branch || "main",
       pat,
       slug,
       autoRestart: autoRestart ?? false,

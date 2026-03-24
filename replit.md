@@ -58,6 +58,7 @@ Express 5 API server. Auth routes + apps routes + process manager.
 
 - Entry: `src/index.ts` — reads `PORT` (default 8080), starts Express
 - App setup: `src/app.ts` — CORS, JSON, routes at `/api`
+- **Key routes**: `GET /api/apps/repo-meta?repoUrl&branch&pat` — fetches `package.json` from GitHub and returns detected start/install command and port. `GET /api/apps/env-template?repoUrl&branch&pat` — fetches `.env.example`, tries specified branch first then main/master fallbacks.
 - Routes: `src/routes/auth.ts` (signup/login/refresh/logout/me), `src/routes/apps.ts` (full CRUD, start/stop/restart, SSE log stream, env vars, env template)
 - Services: `src/services/processManager.ts` — git clone → install → spawn, auto-restart (5x, exponential backoff), log to MongoDB capped collection
 - Middleware: `src/middlewares/auth.ts` — JWT Bearer token verification
