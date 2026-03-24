@@ -14,10 +14,15 @@ export function connectMongo(): Promise<void> {
 
   connectPromise = mongoose
     .connect(uri, {
-      serverSelectionTimeoutMS: 5000,
-      connectTimeoutMS: 5000,
-      socketTimeoutMS: 30000,
-      // Pool of 10 allows auth/app routes to get a connection even while
+      // Give Atlas replica set more time to elect a primary and respond.
+      // 5 s was too tight for cross-region or post-failover scenarios.
+      serverSelectionTimeoutMS: 15000,
+      connectTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+      // Explicit TLS — Atlas always requires it; being explicit prevents
+      // driver versions from downgrading to a plaintext attempt on error.
+      tls: true,
+      // Pool of 10 allows auth/app routes to get connections even while
       // background log writes are in flight.  Each connection ~1-2 MB.
       maxPoolSize: 10,
       // Fail fast if all pool slots are busy rather than queuing forever.
