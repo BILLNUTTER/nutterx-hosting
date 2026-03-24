@@ -194,6 +194,10 @@ export async function startApp(appId: string): Promise<void> {
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
     const envVars: Record<string, string> = { ...process.env } as Record<string, string>;
+    // Remove PORT inherited from the platform process — deployed apps must not
+    // compete with the API server on the same port.  They may set their own
+    // PORT via envVars below, or fall back to their own default (e.g. 3000).
+    delete envVars["PORT"];
     for (const envVar of app.envVars) {
       try {
         envVars[envVar.key] = decrypt(envVar.value);

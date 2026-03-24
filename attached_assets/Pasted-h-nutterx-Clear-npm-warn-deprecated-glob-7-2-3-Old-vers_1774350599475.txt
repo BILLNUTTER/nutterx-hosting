@@ -1,0 +1,201 @@
+h - nutterx
+Clear
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
+npm warn deprecated are-we-there-yet@3.0.1: This package is no longer supported.
+npm warn deprecated gauge@4.0.4: This package is no longer supported.
+npm warn deprecated tar@6.2.1: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+npm warn deprecated fluent-ffmpeg@2.1.3: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+added 623 packages, and audited 624 packages in 8s
+92 packages are looking for funding
+run `npm fund` for details
+18 vulnerabilities (3 low, 5 moderate, 10 high)
+Run `npm audit` for details.
+To address all issues possible (including breaking changes), run:
+To address issues that do not require attention, run:
+npm audit fix
+npm audit fix --force
+Some issues need review, and may require choosing
+a different dependency.
+Deployment cancelled by user.
+Starting deployment for nutterx...
+Cloning repository: https://github.com/kkeizza/Keith (branch: main)
+Cloning into '/home/runner/.nutterx-apps/nutterx'...
+remote: Enumerating objects: 78, done.
+remote: Counting objects: 6% (1/16)
+remote: Counting objects: 37% (6/16)
+remote: Compressing objects: 100% (6/6)
+remote: Counting objects: 50% (8/16)
+remote: Counting objects: 18% (3/16)
+remote: Compressing objects: 33% (2/6)
+remote: Counting objects: 25% (4/16)
+remote: Counting objects: 31% (5/16)
+remote: Compressing objects: 100% (6/6), done.
+remote: Compressing objects: 66% (4/6)
+remote: Compressing objects: 83% (5/6)
+remote: Compressing objects: 50% (3/6)
+remote: Counting objects: 56% (9/16)
+remote: Counting objects: 12% (2/16)
+remote: Compressing objects: 16% (1/6)
+remote: Counting objects: 93% (15/16)
+remote: Counting objects: 100% (16/16), done.
+remote: Counting objects: 100% (16/16)
+remote: Counting objects: 75% (12/16)
+remote: Counting objects: 68% (11/16)
+remote: Counting objects: 43% (7/16)
+remote: Counting objects: 87% (14/16)
+remote: Counting objects: 81% (13/16)
+remote: Counting objects: 62% (10/16)
+Receiving objects: 2% (2/78)
+Receiving objects: 1% (1/78)
+Receiving objects: 10% (8/78)
+Receiving objects: 6% (5/78)
+Receiving objects: 3% (3/78)
+Receiving objects: 5% (4/78)
+Receiving objects: 8% (7/78)
+Receiving objects: 11% (9/78)
+Receiving objects: 7% (6/78)
+Receiving objects: 16% (13/78)
+Receiving objects: 14% (11/78)
+Receiving objects: 12% (10/78)
+Receiving objects: 24% (19/78)
+Receiving objects: 35% (28/78)
+Receiving objects: 30% (24/78)
+Receiving objects: 32% (25/78)
+Receiving objects: 17% (14/78)
+Receiving objects: 23% (18/78)
+Receiving objects: 29% (23/78)
+Receiving objects: 15% (12/78)
+Receiving objects: 21% (17/78)
+Receiving objects: 33% (26/78)
+Receiving objects: 19% (15/78)
+Receiving objects: 20% (16/78)
+Receiving objects: 34% (27/78)
+Receiving objects: 28% (22/78)
+Receiving objects: 26% (21/78)
+Receiving objects: 37% (29/78)
+Receiving objects: 25% (20/78)
+Receiving objects: 38% (30/78)
+Receiving objects: 44% (35/78)
+Receiving objects: 43% (34/78)
+Receiving objects: 42% (33/78)
+Receiving objects: 41% (32/78)
+Receiving objects: 39% (31/78)
+Receiving objects: 55% (43/78)
+Receiving objects: 56% (44/78)
+Receiving objects: 50% (39/78)
+Receiving objects: 53% (42/78)
+Receiving objects: 52% (41/78)
+Receiving objects: 47% (37/78)
+remote: Total 78 (delta 11), reused 10 (delta 10), pack-reused 62 (from 2)
+Receiving objects: 51% (40/78)
+Receiving objects: 46% (36/78)
+Receiving objects: 48% (38/78)
+Receiving objects: 87% (68/78)
+Receiving objects: 69% (54/78)
+Receiving objects: 83% (65/78)
+Receiving objects: 60% (47/78)
+Receiving objects: 85% (67/78)
+Receiving objects: 67% (53/78)
+Receiving objects: 89% (70/78)
+Receiving objects: 84% (66/78)
+Receiving objects: 66% (52/78)
+Receiving objects: 82% (64/78)
+Receiving objects: 57% (45/78)
+Receiving objects: 58% (46/78)
+Receiving objects: 62% (49/78)
+Receiving objects: 88% (69/78)
+Receiving objects: 65% (51/78)
+Receiving objects: 61% (48/78)
+Receiving objects: 76% (60/78)
+Receiving objects: 71% (56/78)
+Receiving objects: 70% (55/78)
+Receiving objects: 73% (57/78)
+Receiving objects: 78% (61/78)
+Receiving objects: 64% (50/78)
+Receiving objects: 75% (59/78)
+Receiving objects: 80% (63/78)
+Receiving objects: 74% (58/78)
+Receiving objects: 79% (62/78)
+Resolving deltas: 24% (6/25)
+Resolving deltas: 40% (10/25)
+Resolving deltas: 84% (21/25)
+Resolving deltas: 32% (8/25)
+Resolving deltas: 44% (11/25)
+Resolving deltas: 76% (19/25)
+Resolving deltas: 48% (12/25)
+Resolving deltas: 56% (14/25)
+Resolving deltas: 52% (13/25)
+Receiving objects: 94% (74/78)
+Resolving deltas: 88% (22/25)
+Receiving objects: 91% (71/78)
+Resolving deltas: 20% (5/25)
+Resolving deltas: 68% (17/25)
+Resolving deltas: 8% (2/25)
+Resolving deltas: 0% (0/25)
+Resolving deltas: 72% (18/25)
+Resolving deltas: 80% (20/25)
+Resolving deltas: 92% (23/25)
+Resolving deltas: 4% (1/25)
+Receiving objects: 98% (77/78)
+Resolving deltas: 36% (9/25)
+Resolving deltas: 96% (24/25)
+Receiving objects: 92% (72/78)
+Receiving objects: 93% (73/78)
+Receiving objects: 100% (78/78)
+Resolving deltas: 60% (15/25)
+Receiving objects: 97% (76/78)
+Resolving deltas: 28% (7/25)
+Receiving objects: 96% (75/78)
+Receiving objects: 100% (78/78), 63.88 KiB | 2.46 MiB/s, done.
+Resolving deltas: 64% (16/25)
+Resolving deltas: 12% (3/25)
+Resolving deltas: 16% (4/25)
+Resolving deltas: 100% (25/25)
+Resolving deltas: 100% (25/25), done.
+Installing dependencies with: npm install --ignore-platform
+npm warn Unknown cli config "--ignore-platform". This will stop working in the next major version of npm.
+npm warn Unknown env config "overrides". This will stop working in the next major version of npm.
+npm warn Unknown env config "verify-deps-before-run". This will stop working in the next major version of npm.
+npm warn Unknown env config "npm-globalconfig". This will stop working in the next major version of npm.
+npm warn Unknown env config "recursive". This will stop working in the next major version of npm.
+npm warn Unknown env config "catalog". This will stop working in the next major version of npm.
+npm warn Unknown env config "ignore-platform". This will stop working in the next major version of npm.
+npm warn Unknown env config "_jsr-registry". This will stop working in the next major version of npm.
+npm warn Unknown env config "minimum-release-age". This will stop working in the next major version of npm.
+npm warn deprecated crypto@1.0.1: This package is no longer supported. It's now a built-in Node module. If you've depended on crypto, you should switch to the one that's built-in.
+npm warn deprecated @npmcli/move-file@1.1.2: This functionality has been moved to @npmcli/fs
+npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+npm warn deprecated phin@2.9.3: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+npm warn deprecated npmlog@6.0.2: This package is no longer supported.
+npm warn deprecated phin@3.7.1: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+npm warn deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
+npm warn deprecated are-we-there-yet@3.0.1: This package is no longer supported.
+npm warn deprecated gauge@4.0.4: This package is no longer supported.
+npm warn deprecated tar@6.2.1: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+npm warn deprecated fluent-ffmpeg@2.1.3: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+added 623 packages, and audited 624 packages in 16s
+92 packages are looking for funding
+run `npm fund` for details
+npm audit fix
+To address all issues possible (including breaking changes), run:
+18 vulnerabilities (3 low, 5 moderate, 10 high)
+To address issues that do not require attention, run:
+Some issues need review, and may require choosing
+npm audit fix --force
+a different dependency.
+Run `npm audit` for details.
+Starting app with: node index.js
+File fetched successfully ✅✅:
+Script loaded successfully✅✅!
+✅ Session File Loaded
+JID verified: keith@s.whatsapp.net Your verified JID: true
+node:events:486 throw er; // Unhandled 'error' event ^ Error: listen EADDRINUSE: address already in use :::8080 at Server.setupListenHandle [as _listen2] (node:net:1940:16) at listenInCluster (node:net:1997:12) at Server.listen (node:net:2102:7) at app.listen (/home/runner/.nutterx-apps/nutterx/node_modules/express/lib/application.js:635:24) at eval (eval at fetchAlphaUrl (/home/runner/.nutterx-apps/nutterx/index.js:1:4009), <anonymous>:1601:5) at fetchAlphaUrl (/home/runner/.nutterx-apps/nutterx/index.js:1:4009) at process.processTicksAndRejections (node:internal/process/task_queues:103:5) Emitted 'error' event on Server instance at: at emitErrorNT (node:net:1976:8) at process.processTicksAndRejections (node:internal/process/task_queues:89:21) { code: 'EADDRINUSE', errno: -98, syscall: 'listen', address: '::', port: 8080 } Node.js v24.13.0
+App crashed (exit code: 1)
+Auto-restarting (attempt 1/5)...
