@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
-import { Play, Square, RefreshCw, Trash2, Terminal, Settings, ArrowLeft, Loader2, Save, Trash } from "lucide-react";
+import { Play, Square, RefreshCw, Trash2, Terminal, Settings, ArrowLeft, Loader2, Save, Trash, AlertCircle } from "lucide-react";
 import { format } from "date-fns";
 import { clsx } from "clsx";
 
@@ -81,6 +81,22 @@ export default function AppDetail() {
       queryClient.invalidateQueries({ queryKey: getGetAppQueryKey(id!) });
     } catch (e: any) {
       toast({ title: "Failed to save variables", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const [isSavingAndRestarting, setIsSavingAndRestarting] = useState(false);
+  const handleSaveAndRestart = async () => {
+    setIsSavingAndRestarting(true);
+    try {
+      await updateEnvVars({ id: id!, data: { envVars: envForm } });
+      toast({ title: "Variables saved — restarting app..." });
+      clearLogs();
+      setActiveTab("logs");
+      restartApp({ id: app!.id });
+    } catch (e: any) {
+      toast({ title: "Failed to save variables", description: e.message, variant: "destructive" });
+    } finally {
+      setIsSavingAndRestarting(false);
     }
   };
 
@@ -192,15 +208,40 @@ export default function AppDetail() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 space-y-6">
               <Card className="p-6">
-                <div className="flex items-center justify-between mb-6">
+                <div className="flex items-start justify-between mb-4 gap-4">
                   <div>
                     <h3 className="text-lg font-bold">Environment Variables</h3>
                     <p className="text-sm text-muted-foreground">Manage secrets and configuration.</p>
                   </div>
-                  <Button onClick={handleSaveEnv} disabled={isUpdatingEnv} className="gap-2">
-                    {isUpdatingEnv ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save Changes
-                  </Button>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <Button
+                      variant="outline"
+                      onClick={handleSaveEnv}
+                      disabled={isUpdatingEnv || isSavingAndRestarting}
+                      className="gap-2"
+                    >
+                      {isUpdatingEnv ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      Save
+                    </Button>
+                    {isProcessActive && (
+                      <Button
+                        onClick={handleSaveAndRestart}
+                        disabled={isSavingAndRestarting || isUpdatingEnv}
+                        className="gap-2 bg-amber-600 hover:bg-amber-700 text-white"
+                      >
+                        {isSavingAndRestarting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                        Save & Restart
+                      </Button>
+                    )}
+                  </div>
                 </div>
+
+                {isProcessActive && (
+                  <div className="flex items-start gap-2 text-sm text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2.5 mb-5">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    <span>Your app is currently running. Changes to environment variables take effect after a restart. Use <strong>Save & Restart</strong> to apply them immediately.</span>
+                  </div>
+                )}
                 
                 <div className="space-y-3">
                   {envForm.map((ev, i) => (
