@@ -188,13 +188,38 @@ router.get("/apps/repo-meta", requireAuth, async (req: Request, res: Response) =
     }
 
     const scripts = (pkgJson.scripts as Record<string, string> | undefined) ?? {};
-    const startCommand = scripts.start ?? scripts.serve ?? null;
+    let startCommand: string | null = scripts.start ?? scripts.serve ?? null;
     const buildCommand = scripts.build ?? null;
 
+    // If no start script, fall back to `node <main>` from package.json
+    if (!startCommand && typeof pkgJson.main === "string" && pkgJson.main) {
+      startCommand = `node ${pkgJson.main}`;
+    }
+
+    // If still no start command, check Procfile for web process
+    if (!startCommand) {
+      for (const b of branchesToTry) {
+        const pfUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/Procfile`;
+        const pfResp = await fetch(pfUrl, { headers });
+        if (pfResp.ok) {
+          const pfText = await pfResp.text();
+          const webLine = pfText.split("\n").find((l) => l.startsWith("web:"));
+          if (webLine) {
+            startCommand = webLine.replace(/^web:\s*/, "").trim();
+          }
+          break;
+        }
+      }
+    }
+
+    // Determine install command: respect packageManager field, else default to npm install
     let installCommand: string | null = null;
     if (pkgJson.packageManager && typeof pkgJson.packageManager === "string") {
       const pm = (pkgJson.packageManager as string).split("@")[0];
       installCommand = `${pm} install`;
+    } else {
+      // Default to npm install since we found a package.json
+      installCommand = "npm install";
     }
 
     let port: number | null = null;

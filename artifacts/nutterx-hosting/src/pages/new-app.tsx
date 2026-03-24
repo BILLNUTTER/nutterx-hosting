@@ -74,7 +74,7 @@ export default function NewApp() {
     }
   };
 
-  const fetchRepoMeta = async () => {
+  const fetchRepoMeta = async (silent = false) => {
     if (!repoUrl) return;
     setIsFetchingMeta(true);
     try {
@@ -88,11 +88,13 @@ export default function NewApp() {
         if (meta.startCommand && !startCommand) setStartCommand(meta.startCommand);
         if (meta.installCommand && !installCommand) setInstallCommand(meta.installCommand);
         if (meta.port && !port) setPort(String(meta.port));
-        toast({
-          title: "Settings detected",
-          description: "Install/start commands pre-filled from package.json.",
-        });
-      } else {
+        if (!silent) {
+          toast({
+            title: "Settings detected",
+            description: "Install/start commands pre-filled from package.json.",
+          });
+        }
+      } else if (!silent) {
         toast({
           title: "No package.json found",
           description: "Fill in the commands manually.",
@@ -100,7 +102,7 @@ export default function NewApp() {
         });
       }
     } catch {
-      toast({ title: "Auto-detect failed", variant: "destructive" });
+      if (!silent) toast({ title: "Auto-detect failed", variant: "destructive" });
     } finally {
       setIsFetchingMeta(false);
     }
@@ -117,7 +119,9 @@ export default function NewApp() {
         return;
       }
       setStep(2);
+      // Auto-fetch both env vars and build/run commands in parallel (silent — no toast)
       fetchEnvTemplate();
+      fetchRepoMeta(true);
     } else if (step === 2) {
       setStep(3);
     }
@@ -230,7 +234,7 @@ export default function NewApp() {
                       <Label htmlFor="repo">GitHub Repository URL *</Label>
                       <div className="relative">
                         <Github className="absolute left-3 top-3 w-5 h-5 text-muted-foreground" />
-                        <Input id="repo" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} placeholder="https://github.com/username/repo" className="pl-10 h-11" />
+                        <Input id="repo" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} onBlur={() => { if (repoUrl) fetchRepoMeta(true); }} placeholder="https://github.com/username/repo" className="pl-10 h-11" />
                       </div>
                     </div>
                     <div className="space-y-2">
