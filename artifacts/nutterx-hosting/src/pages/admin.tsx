@@ -27,6 +27,7 @@ import {
   TrendingUp, Eye, EyeOff, Plus, AlertTriangle, Zap, Play, Square,
   BookOpen, HelpCircle, Activity
 } from "lucide-react";
+import { getBaseUrl } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 
 const ADMIN_TOKEN_KEY = "nutterx_admin_token";
@@ -45,7 +46,8 @@ interface PesapalConfig { consumerKey: string; consumerSecret: string; isProduct
 
 function adminFetch(path: string, options?: RequestInit) {
   const token = sessionStorage.getItem(ADMIN_TOKEN_KEY);
-  return _nativeFetch(path, {
+  const base = getBaseUrl(); // empty on Replit; full origin (e.g. https://api.onrender.com) elsewhere
+  return _nativeFetch(`${base}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -384,7 +386,8 @@ export default function Admin() {
     setAdminLogs([]);
     setSelectedAdminAppId(appId);
     const token = sessionStorage.getItem(ADMIN_TOKEN_KEY);
-    const es = new EventSource(`/api/admin/my-apps/${appId}/logs/stream?token=${token}`);
+    const base = getBaseUrl();
+    const es = new EventSource(`${base}/api/admin/my-apps/${appId}/logs/stream?token=${token}`);
     adminEsRef.current = es;
     es.onmessage = (e) => {
       try {

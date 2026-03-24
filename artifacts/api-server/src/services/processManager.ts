@@ -24,7 +24,8 @@ export function subscribeToLogs(appId: string, cb: (ev: LogEvent) => void): () =
   return () => logBus.off(appId, cb);
 }
 
-const APPS_DIR = path.join(os.homedir(), ".nutterx-apps");
+// Allow overriding via env so persistent disks (Render, Railway, etc.) can be mounted
+const APPS_DIR = process.env.APPS_DIR ?? path.join(os.homedir(), ".nutterx-apps");
 
 interface RunningProcess {
   process: ChildProcess;
@@ -394,4 +395,39 @@ export async function restartApp(appId: string): Promise<void> {
 
 export function getProcessStatus(appId: string): boolean {
   return processes.has(appId);
+}
+
+/**
+ * Called once at server startup.
+ * Finds every app that was "running" or "installing" (mid-deploy) when the
+ * server last exited and re-deploys them so they come back to life automatically.
+ */
+export async function recoverApps(): Promise<void> {
+  try {
+    await connectMongo();
+    const staleApps = await App.find({ status: { $in: ["running", "installing"] } }).lean();
+    if (staleApps.length === 0) return;
+
+    // Reset their status to stopped — startApp will set it correctly as it runs
+    await App.updateMany(
+      { status: { $in: ["running", "installing"] } },
+      { $set: { status: "stopped" } }
+    );
+
+    console.info(`[recovery] Restarting ${staleApps.length} app(s) from previous session…`);
+
+    // Stagger restarts by 3 s so we don't hammer GitHub/npm all at once
+    for (let i = 0; i < staleApps.length; i++) {
+      const app = staleApps[i];
+      const delay = i * 3000;
+      setTimeout(() => {
+        startApp(app._id.toString()).catch((err: Error) => {
+          console.error(`[recovery] Failed to restart ${app.slug}: ${err.message}`);
+        });
+      }, delay);
+    }
+  } catch (err) {
+    // Don't crash the server if recovery fails
+    console.error("[recovery] Error during app recovery:", err);
+  }
 }

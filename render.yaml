@@ -1,0 +1,52 @@
+databases: []
+
+services:
+  # ─── API Server (Node.js) ───────────────────────────────────────────────────
+  - type: web
+    name: nutterx-api
+    runtime: node
+    # Build from the monorepo root so all workspace packages are available
+    buildCommand: "npm install -g pnpm@9 && pnpm install --frozen-lockfile && pnpm --filter @workspace/api-server run build"
+    startCommand: "pnpm --filter @workspace/api-server run start"
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # User-deployed apps will be stored on this persistent disk path
+      - key: APPS_DIR
+        value: /data/nutterx-apps
+      # ── Secrets: set these in the Render dashboard ──────────────────────────
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+    disk:
+      name: apps-data
+      mountPath: /data
+      sizeGB: 10
+
+  # ─── Frontend (Static Site) ─────────────────────────────────────────────────
+  - type: web
+    name: nutterx-frontend
+    runtime: static
+    buildCommand: "npm install -g pnpm@9 && pnpm install --frozen-lockfile && BASE_PATH=/ pnpm --filter @workspace/nutterx-hosting run build"
+    staticPublishPath: ./artifacts/nutterx-hosting/dist/public
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: "no-cache"
+    routes:
+      # SPA fallback — all paths serve index.html
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # Set this to the URL of the nutterx-api service above
+      # e.g.  https://nutterx-api.onrender.com
+      - key: VITE_API_URL
+        sync: false

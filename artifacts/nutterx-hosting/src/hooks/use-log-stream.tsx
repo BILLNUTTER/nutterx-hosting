@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useGetAppLogs } from "@workspace/api-client-react";
+import { useGetAppLogs, getBaseUrl } from "@workspace/api-client-react";
 import type { LogEntry } from "@workspace/api-client-react";
 
 export function useLogStream(appId: string) {
@@ -37,7 +37,8 @@ export function useLogStream(appId: string) {
       const token = localStorage.getItem("access_token") ?? "";
       const params = new URLSearchParams({ token });
       if (since) params.set("since", since);
-      return `/api/apps/${appId}/logs/stream?${params.toString()}`;
+      const base = getBaseUrl(); // empty string when using shared proxy; full origin on external deployments
+      return `${base}/api/apps/${appId}/logs/stream?${params.toString()}`;
     }
 
     function addLog(newLog: LogEntry) {
