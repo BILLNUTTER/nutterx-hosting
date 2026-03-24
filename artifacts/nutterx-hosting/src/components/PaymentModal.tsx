@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2, X, CheckCircle2, CreditCard } from "lucide-react";
+import { Loader2, X, CheckCircle2, CreditCard, AlertCircle, RefreshCw } from "lucide-react";
 
 interface PaymentModalProps {
   open: boolean;
@@ -53,6 +53,39 @@ export function PaymentModal({ open, onClose, onSuccess, title }: PaymentModalPr
     }, 3000);
   }, [onClose, onSuccess]);
 
+  const initiate = useCallback(async () => {
+    setStage("initiating");
+    setErrorMsg("");
+    setRedirectUrl("");
+    setTrackingId("");
+    stopPolling();
+    try {
+      const res = await fetch("/api/billing/initiate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${getToken()}`,
+        },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json() as {
+        redirectUrl?: string;
+        orderTrackingId?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.redirectUrl) {
+        throw new Error(data.error ?? "Failed to initiate payment");
+      }
+      setRedirectUrl(data.redirectUrl);
+      setTrackingId(data.orderTrackingId ?? "");
+      setStage("paying");
+      startPolling(data.orderTrackingId ?? "");
+    } catch (err: any) {
+      setErrorMsg(err.message ?? "Payment initiation failed");
+      setStage("error");
+    }
+  }, [startPolling]);
+
   useEffect(() => {
     if (!open) {
       stopPolling();
@@ -67,36 +100,10 @@ export function PaymentModal({ open, onClose, onSuccess, title }: PaymentModalPr
     if (initiated.current) return;
     initiated.current = true;
 
-    (async () => {
-      try {
-        const res = await fetch("/api/billing/initiate", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${getToken()}`,
-          },
-          body: JSON.stringify({}),
-        });
-        const data = await res.json() as {
-          redirectUrl?: string;
-          orderTrackingId?: string;
-          error?: string;
-        };
-        if (!res.ok || !data.redirectUrl) {
-          throw new Error(data.error ?? "Failed to initiate payment");
-        }
-        setRedirectUrl(data.redirectUrl);
-        setTrackingId(data.orderTrackingId ?? "");
-        setStage("paying");
-        startPolling(data.orderTrackingId ?? "");
-      } catch (err: any) {
-        setErrorMsg(err.message ?? "Payment initiation failed");
-        setStage("error");
-      }
-    })();
+    initiate();
 
     return () => stopPolling();
-  }, [open, startPolling]);
+  }, [open, initiate]);
 
   if (!open) return null;
 
@@ -163,10 +170,26 @@ export function PaymentModal({ open, onClose, onSuccess, title }: PaymentModalPr
           )}
 
           {stage === "error" && (
-            <div className="text-center py-12 px-6">
-              <p className="text-destructive font-medium mb-2">Payment failed</p>
-              <p className="text-sm text-muted-foreground mb-5">{errorMsg}</p>
-              <Button variant="outline" onClick={onClose}>Close</Button>
+            <div className="text-center py-10 px-6">
+              <div className="w-12 h-12 rounded-full bg-destructive/10 border border-destructive/30 flex items-center justify-center mx-auto mb-4">
+                <AlertCircle className="w-6 h-6 text-destructive" />
+              </div>
+              <p className="font-semibold text-base mb-2">Could not open payment</p>
+              <p className="text-sm text-muted-foreground mb-5 max-w-xs mx-auto leading-relaxed">{errorMsg}</p>
+              <div className="flex gap-3 justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    initiated.current = false;
+                    initiate();
+                  }}
+                  className="gap-2"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Try again
+                </Button>
+                <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+              </div>
             </div>
           )}
         </div>
