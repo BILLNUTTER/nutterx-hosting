@@ -1,5 +1,5 @@
-import { spawn, execSync, type ChildProcess } from "child_process";
-import { existsSync, mkdirSync } from "fs";
+import { spawn, exec, execSync, type ChildProcess } from "child_process";
+import { existsSync, mkdirSync, rm } from "fs";
 import path from "path";
 import os from "os";
 import { EventEmitter } from "events";
@@ -31,6 +31,18 @@ const APPS_DIR = process.env.APPS_DIR ?? path.join(os.homedir(), ".nutterx-apps"
 // session, so packages only get downloaded once per process lifetime.
 const NPM_CACHE_DIR = path.join(os.tmpdir(), "nutterx-npm-cache");
 const PNPM_STORE_DIR = path.join(os.tmpdir(), "nutterx-pnpm-store");
+
+// Cached python path — found once asynchronously, never blocks the event loop
+let _pythonPath: string | null = null;
+function getPythonPath(): Promise<string> {
+  if (_pythonPath !== null) return Promise.resolve(_pythonPath);
+  return new Promise((resolve) => {
+    exec("which python3 || which python", (err, stdout) => {
+      _pythonPath = err ? "" : stdout.trim();
+      resolve(_pythonPath);
+    });
+  });
+}
 
 interface RunningProcess {
   process: ChildProcess;
@@ -64,13 +76,11 @@ function getAppDir(slug: string): string {
   return path.join(APPS_DIR, slug);
 }
 
-/** Reliably delete a directory tree. Uses shell rm -rf to avoid Node fs.rm race conditions. */
-function removeDir(dir: string): void {
-  try {
-    execSync(`rm -rf ${JSON.stringify(dir)}`, { stdio: "ignore" });
-  } catch {
-    // ignore — directory may not exist
-  }
+/** Async directory removal — does NOT block the event loop. */
+function removeDir(dir: string): Promise<void> {
+  return new Promise((resolve) => {
+    rm(dir, { recursive: true, force: true }, () => resolve());
+  });
 }
 
 async function writeLog(appId: string, line: string, stream: "stdout" | "stderr" | "system") {
@@ -174,7 +184,7 @@ export async function startApp(appId: string): Promise<void> {
 
   const appDir = getAppDir(app.slug);
 
-  removeDir(appDir);
+  await removeDir(appDir);
 
   try {
     // ── Stage: clone ───────────────────────────────────────────────────────
@@ -211,11 +221,8 @@ export async function startApp(appId: string): Promise<void> {
       if (!/--prefer-offline/.test(installCmd))   installCmd += " --prefer-offline";
     }
 
-    // Locate python3 for node-gyp (native module compilation)
-    let pythonPath = "";
-    try {
-      pythonPath = execSync("which python3 || which python", { encoding: "utf8" }).trim();
-    } catch {}
+    // Locate python3 for node-gyp — resolved once and cached, never blocks event loop
+    const pythonPath = await getPythonPath();
 
     const installEnv: Record<string, string> = {
       ...(process.env as Record<string, string>),
