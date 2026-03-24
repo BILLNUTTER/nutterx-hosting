@@ -23,9 +23,10 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      # User-deployed apps are stored on the persistent disk
+      # App clones live in /tmp — ephemeral, re-created on restart by recoverApps()
+      # All persistent data (users, apps, env vars, logs) is stored in MongoDB
       - key: APPS_DIR
-        value: /data/nutterx-apps
+        value: /tmp/nutterx-apps
       # ── Secrets: add these in the Render dashboard ─────────────────────────
       - key: MONGODB_URI
         sync: false
@@ -35,7 +36,3 @@ services:
         sync: false
       - key: ENCRYPTION_KEY
         sync: false
-    disk:
-      name: apps-data
-      mountPath: /data
-      sizeGB: 10
