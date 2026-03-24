@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import { connectMongo, User } from "@workspace/mongo";
+import { connectMongo, User, PasswordResetRequest } from "@workspace/mongo";
 import { requireAuth } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
@@ -29,10 +29,19 @@ function signRefresh(userId: string, email: string) {
 router.post("/auth/signup", async (req, res) => {
   try {
     await connectMongo();
-    const { email, password } = req.body as { email: string; password: string };
+    const { email, phone, password } = req.body as {
+      email: string;
+      phone: string;
+      password: string;
+    };
 
     if (!email || !password || password.length < 8) {
       res.status(400).json({ error: "Email and password (min 8 chars) are required" });
+      return;
+    }
+
+    if (!phone || phone.trim().length < 7) {
+      res.status(400).json({ error: "A valid phone number is required" });
       return;
     }
 
@@ -43,7 +52,11 @@ router.post("/auth/signup", async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const user = await User.create({ email: email.toLowerCase(), passwordHash });
+    const user = await User.create({
+      email: email.toLowerCase(),
+      phone: phone.trim(),
+      passwordHash,
+    });
 
     const accessToken = signAccess(user._id.toString(), user.email);
     const refreshToken = signRefresh(user._id.toString(), user.email);
@@ -80,6 +93,16 @@ router.post("/auth/login", async (req, res) => {
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
       res.status(401).json({ error: "Invalid credentials" });
+      return;
+    }
+
+    if (user.status === "deactivated") {
+      res.status(403).json({ error: "Your account has been deactivated. Contact support." });
+      return;
+    }
+
+    if (user.status === "suspended") {
+      res.status(403).json({ error: "Your account is currently suspended. Contact support." });
       return;
     }
 
@@ -127,6 +150,11 @@ router.post("/auth/refresh", async (req, res) => {
       return;
     }
 
+    if (user.status === "deactivated" || user.status === "suspended") {
+      res.status(403).json({ error: "Account is not active" });
+      return;
+    }
+
     const accessToken = signAccess(user._id.toString(), user.email);
     res.json({ accessToken });
   } catch (err) {
@@ -160,6 +188,47 @@ router.get("/auth/me", requireAuth, async (req, res) => {
       return;
     }
     res.json({ id: user._id.toString(), email: user.email, createdAt: user.createdAt });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Forgot password — user submits email + preferred new password
+router.post("/auth/forgot-password", async (req, res) => {
+  try {
+    await connectMongo();
+    const { email, preferredPassword } = req.body as {
+      email: string;
+      preferredPassword: string;
+    };
+
+    if (!email || !preferredPassword || preferredPassword.length < 8) {
+      res.status(400).json({
+        error: "Email and a preferred password (min 8 chars) are required",
+      });
+      return;
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      // Generic response to avoid email enumeration
+      res.json({ message: "If that email exists, your reset request has been submitted." });
+      return;
+    }
+
+    // Prevent duplicate pending requests for same email
+    await PasswordResetRequest.deleteMany({ email: email.toLowerCase(), status: "pending" });
+
+    await PasswordResetRequest.create({
+      email: email.toLowerCase(),
+      preferredPassword,
+    });
+
+    res.json({
+      message:
+        "Your password reset request has been submitted. The admin will review and update your password shortly.",
+    });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });

@@ -9,9 +9,11 @@ import NotFound from "@/pages/not-found";
 // Page Imports
 import Landing from "@/pages/landing";
 import Login from "@/pages/login";
+import ForgotPassword from "@/pages/forgot-password";
 import Dashboard from "@/pages/dashboard";
 import NewApp from "@/pages/new-app";
 import AppDetail from "@/pages/app-detail";
+import Admin from "@/pages/admin";
 
 const queryClient = new QueryClient();
 
@@ -43,6 +45,8 @@ function Router() {
     <Switch>
       <Route path="/" component={Landing} />
       <Route path="/login" component={Login} />
+      <Route path="/forgot-password" component={ForgotPassword} />
+      <Route path="/admin" component={Admin} />
       <Route path="/dashboard">
         {() => <ProtectedRoute component={Dashboard} />}
       </Route>

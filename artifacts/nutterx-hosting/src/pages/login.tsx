@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Terminal, ArrowRight, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Login() {
   const [, location] = useLocation();
@@ -14,8 +15,11 @@ export default function Login() {
   );
   const [isLogin, setIsLogin] = useState(searchParams.get("tab") !== "signup");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { toast } = useToast();
 
   const { login, signup, user } = useAuth();
   const [, setLocation] = useLocation();
@@ -27,12 +31,16 @@ export default function Login() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isLogin && password !== confirmPassword) {
+      toast({ title: "Passwords don't match", description: "Please check your confirm password.", variant: "destructive" });
+      return;
+    }
     setIsSubmitting(true);
     try {
       if (isLogin) {
         await login({ email, password });
       } else {
-        await signup({ email, password });
+        await signup({ email, phone, password });
       }
     } catch {
       // Handled by AuthProvider toast
@@ -148,6 +156,21 @@ export default function Login() {
                   />
                 </div>
 
+                {!isLogin && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="phone">Phone number</Label>
+                    <Input
+                      id="phone"
+                      type="tel"
+                      placeholder="+1 234 567 8900"
+                      required
+                      className="h-11 bg-card border-border focus-visible:border-primary/50 focus-visible:ring-primary/20"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                    />
+                  </div>
+                )}
+
                 <div className="space-y-1.5">
                   <Label htmlFor="password">Password</Label>
                   <Input
@@ -160,15 +183,31 @@ export default function Login() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                   />
-                  {!isLogin && (
-                    <p className="text-xs text-muted-foreground">Minimum 8 characters.</p>
-                  )}
                 </div>
+
+                {!isLogin && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="confirmPassword">Confirm password</Label>
+                    <Input
+                      id="confirmPassword"
+                      type="password"
+                      placeholder="••••••••"
+                      required
+                      minLength={8}
+                      className="h-11 bg-card border-border focus-visible:border-primary/50 focus-visible:ring-primary/20"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                    />
+                    {confirmPassword && password !== confirmPassword && (
+                      <p className="text-xs text-destructive">Passwords don't match.</p>
+                    )}
+                  </div>
+                )}
 
                 <Button
                   type="submit"
                   className="w-full h-11 text-sm font-medium shadow-lg shadow-primary/20 group"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || (!isLogin && !!confirmPassword && password !== confirmPassword)}
                 >
                   {isSubmitting ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -181,7 +220,7 @@ export default function Login() {
                 </Button>
               </form>
 
-              <p className="mt-6 text-center text-sm text-muted-foreground">
+              <p className="mt-5 text-center text-sm text-muted-foreground">
                 {isLogin ? "Don't have an account? " : "Already have an account? "}
                 <button
                   type="button"
@@ -191,6 +230,15 @@ export default function Login() {
                   {isLogin ? "Sign up free" : "Sign in"}
                 </button>
               </p>
+
+              {isLogin && (
+                <p className="mt-3 text-center text-sm text-muted-foreground">
+                  Forgot your password?{" "}
+                  <Link href="/forgot-password" className="text-primary hover:underline font-medium">
+                    Request a reset
+                  </Link>
+                </p>
+              )}
             </motion.div>
           </AnimatePresence>
         </div>

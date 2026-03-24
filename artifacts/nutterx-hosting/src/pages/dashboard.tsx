@@ -3,7 +3,7 @@ import { useListApps } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/StatusBadge";
 import { format } from "date-fns";
-import { Plus, AlertCircle, Github, ArrowRight, Rocket, Clock, ChevronRight } from "lucide-react";
+import { Plus, AlertCircle, Rocket, ChevronRight } from "lucide-react";
 import { Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -58,67 +58,48 @@ export default function Dashboard() {
       ) : apps && apps.length > 0 ? (
         <div className="border border-border rounded-xl overflow-hidden bg-card shadow-sm">
           {/* Table header */}
-          <div className="hidden md:grid grid-cols-[minmax(160px,2fr)_120px_minmax(180px,2fr)_140px_80px] gap-4 px-5 py-3 border-b border-border bg-muted/20">
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">App Name</span>
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</span>
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Repository</span>
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Last Deploy</span>
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider"></span>
+          <div className="hidden md:grid grid-cols-[minmax(180px,2fr)_130px_160px_90px] gap-4 px-5 py-2.5 border-b border-border bg-muted/30">
+            {["App Name", "Status", "Date Deployed", ""].map((h) => (
+              <span key={h} className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{h}</span>
+            ))}
           </div>
 
           {/* Table rows */}
-          {apps.map((app, i) => (
-            <Link key={app.id} href={`/apps/${app.id}`}>
-              <div className={`group flex flex-col md:grid md:grid-cols-[minmax(160px,2fr)_120px_minmax(180px,2fr)_140px_80px] gap-3 md:gap-4 items-start md:items-center px-5 py-4 hover:bg-white/[0.03] cursor-pointer transition-colors border-b border-border/50 last:border-0 ${i === 0 ? "" : ""}`}>
-                {/* Name */}
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-8 h-8 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
+          {apps.map((app) => (
+            <div
+              key={app.id}
+              className="group flex flex-col md:grid md:grid-cols-[minmax(180px,2fr)_130px_160px_90px] gap-3 md:gap-4 items-start md:items-center px-5 py-3.5 border-b border-border/40 last:border-0 hover:bg-white/[0.02] transition-colors"
+            >
+              {/* Name */}
+              <Link href={`/apps/${app.id}`}>
+                <div className="flex items-center gap-3 cursor-pointer">
+                  <div className="w-8 h-8 rounded bg-primary/10 border border-primary/15 flex items-center justify-center flex-shrink-0">
                     <span className="text-primary font-bold text-xs uppercase">{app.name.slice(0, 2)}</span>
                   </div>
                   <div className="min-w-0">
-                    <p className="font-semibold text-sm truncate group-hover:text-primary transition-colors">{app.name}</p>
-                    <p className="text-xs text-muted-foreground font-mono truncate">{app.slug}</p>
+                    <p className="font-medium text-sm group-hover:text-primary transition-colors truncate">{app.name}</p>
+                    <p className="text-[11px] text-muted-foreground font-mono">{app.slug}</p>
                   </div>
                 </div>
+              </Link>
 
-                {/* Status */}
-                <div className="md:block">
-                  <StatusBadge status={app.status} />
-                </div>
+              {/* Status */}
+              <StatusBadge status={app.status} />
 
-                {/* Repo */}
-                <div className="flex items-center gap-2 min-w-0 text-sm text-muted-foreground">
-                  <Github className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span className="truncate text-xs font-mono">
-                    {app.repoUrl.replace("https://github.com/", "")}
-                  </span>
-                </div>
+              {/* Date deployed */}
+              <span className="text-sm text-muted-foreground">
+                {app.lastDeployedAt
+                  ? format(new Date(app.lastDeployedAt), "MMM d, yyyy HH:mm")
+                  : <span className="italic text-muted-foreground/50">Never deployed</span>}
+              </span>
 
-                {/* Last deployed */}
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>
-                    {app.lastDeployedAt
-                      ? format(new Date(app.lastDeployedAt), "MMM d, HH:mm")
-                      : "Never"}
-                  </span>
-                </div>
-
-                {/* Action */}
-                <div className="flex justify-end">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 text-xs text-muted-foreground hover:text-primary gap-1 px-2"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <Link href={`/apps/${app.id}`}>
-                      <span className="flex items-center gap-1">Manage <ChevronRight className="w-3.5 h-3.5" /></span>
-                    </Link>
-                  </Button>
-                </div>
-              </div>
-            </Link>
+              {/* Action */}
+              <Link href={`/apps/${app.id}`}>
+                <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground hover:text-primary gap-0.5 px-2">
+                  Manage <ChevronRight className="w-3.5 h-3.5" />
+                </Button>
+              </Link>
+            </div>
           ))}
         </div>
       ) : (

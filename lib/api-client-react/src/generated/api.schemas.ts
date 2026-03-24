@@ -21,6 +21,7 @@ export interface AuthRequest {
   email: string;
   /** @minLength 8 */
   password: string;
+  phone?: string;
 }
 
 export interface UserProfile {
