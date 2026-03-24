@@ -1,6 +1,6 @@
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Terminal, Zap, GitBranch, Eye, Shield, Users, ArrowRight, CheckCircle, Github, Globe } from "lucide-react";
+import { Terminal, Zap, Eye, Shield, Users, ArrowRight, CheckCircle, Globe, CreditCard } from "lucide-react";
 import { motion } from "framer-motion";
 
 const features = [
@@ -15,9 +15,9 @@ const features = [
     description: "Stream live stdout/stderr from your running process directly in the browser. No SSH required.",
   },
   {
-    icon: GitBranch,
-    title: "Branch Control",
-    description: "Choose which branch to deploy. Switch branches and redeploy with one click.",
+    icon: CreditCard,
+    title: "Simple Pricing",
+    description: "Just KSH 150 per month. No hidden fees, no complex tiers — one flat price for unlimited deployments.",
   },
   {
     icon: Shield,
@@ -37,10 +37,10 @@ const features = [
 ];
 
 const steps = [
-  { step: "01", title: "Create an account", desc: "Register in seconds with your email and password." },
-  { step: "02", title: "Paste your repo URL", desc: "Enter any public (or private with PAT) GitHub repository." },
+  { step: "01", title: "Create an account", desc: "Register in seconds with your email, phone, and password." },
+  { step: "02", title: "Paste your repo URL", desc: "Enter any public GitHub repository URL." },
   { step: "03", title: "Set env vars", desc: "Add environment variables your app needs securely." },
-  { step: "04", title: "Hit Deploy", desc: "Watch real-time logs as your app clones, installs, and starts." },
+  { step: "04", title: "Pay & Deploy", desc: "Make a one-time KSH 150 payment via M-Pesa, then watch your app go live." },
 ];
 
 const stacks = ["Node.js", "Express", "Discord Bots", "WhatsApp Bots", "Telegram Bots", "REST APIs", "Next.js", "Fastify"];
@@ -91,7 +91,7 @@ export default function Landing() {
           >
             <div className="inline-flex items-center gap-2 border border-violet-500/25 bg-violet-500/10 text-violet-400 text-xs font-mono px-3 py-1.5 rounded-full mb-8">
               <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-              Deploy any GitHub repo in under 60 seconds
+              Deploy any GitHub repo — only KSH 150/month
             </div>
 
             <h1 className="text-5xl sm:text-6xl md:text-7xl font-extrabold tracking-tight leading-[1.05]">
@@ -105,13 +105,13 @@ export default function Landing() {
             </h1>
 
             <p className="mt-6 text-xl text-zinc-400 max-w-2xl mx-auto leading-relaxed">
-              Nutterx is a self-hosted Heroku-style platform. Paste a GitHub URL, configure your env vars, and get real-time logs streaming directly in your browser.
+              Nutterx is a self-hosted Heroku-style platform. Paste a GitHub URL, configure your env vars, pay KSH 150, and get real-time logs streaming directly in your browser.
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 justify-center mt-10">
               <Link href="/login?tab=signup">
                 <Button size="lg" className="bg-violet-600 hover:bg-violet-500 text-white text-base px-8 shadow-xl shadow-violet-500/30 border-0">
-                  Start Deploying Free <ArrowRight className="w-5 h-5 ml-2" />
+                  Start Deploying <ArrowRight className="w-5 h-5 ml-2" />
                 </Button>
               </Link>
               <Link href="/login">
@@ -145,6 +145,47 @@ export default function Landing() {
                 <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
                 <span className="text-green-400/70 text-xs">live · 0 crashes · uptime 3h 22m</span>
               </div>
+            </div>
+          </motion.div>
+        </div>
+      </section>
+
+      {/* Pricing highlight */}
+      <section className="py-16 px-4">
+        <div className="max-w-3xl mx-auto">
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="relative bg-gradient-to-br from-violet-600/20 via-violet-500/10 to-blue-500/10 border border-violet-500/30 rounded-2xl p-8 text-center overflow-hidden"
+          >
+            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(139,92,246,0.15),transparent_70%)]" />
+            <div className="relative">
+              <div className="inline-flex items-center gap-2 text-violet-400 text-xs font-mono uppercase tracking-widest bg-violet-500/15 border border-violet-500/25 px-3 py-1 rounded-full mb-5">
+                <CreditCard className="w-3.5 h-3.5" /> Simple Pricing
+              </div>
+              <div className="flex items-end justify-center gap-2 mb-3">
+                <span className="text-6xl font-black text-white">150</span>
+                <div className="text-left pb-2">
+                  <div className="text-2xl font-bold text-violet-300">KSH</div>
+                  <div className="text-sm text-zinc-400">per month</div>
+                </div>
+              </div>
+              <p className="text-zinc-400 max-w-md mx-auto mb-6">
+                One flat price. Deploy unlimited apps, stream real-time logs, manage env vars, and keep your bots alive 24/7.
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-4 text-sm text-zinc-300 mb-6">
+                {["Unlimited apps", "Real-time logs", "Auto-restart", "M-Pesa payment"].map((t) => (
+                  <span key={t} className="flex items-center gap-1.5">
+                    <CheckCircle className="w-4 h-4 text-green-400/80" /> {t}
+                  </span>
+                ))}
+              </div>
+              <Link href="/login?tab=signup">
+                <Button className="bg-violet-600 hover:bg-violet-500 text-white px-8 shadow-lg shadow-violet-500/30 border-0">
+                  Get Started — KSH 150/month
+                </Button>
+              </Link>
             </div>
           </motion.div>
         </div>
@@ -197,7 +238,7 @@ export default function Landing() {
         <div className="max-w-4xl mx-auto">
           <div className="text-center mb-16">
             <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">Up and running in four steps</h2>
-            <p className="mt-4 text-zinc-400">No credit card required. No complex configuration.</p>
+            <p className="mt-4 text-zinc-400">Pay once via M-Pesa. Deploy in minutes.</p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             {steps.map((s, i) => (
@@ -227,16 +268,17 @@ export default function Landing() {
         </div>
         <div className="relative max-w-2xl mx-auto text-center">
           <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4">Ready to deploy?</h2>
-          <p className="text-zinc-400 mb-8">Join other developers already hosting their bots and APIs on Nutterx.</p>
+          <p className="text-zinc-400 mb-2">Keep your bots and APIs online 24/7 for just KSH 150 per month.</p>
+          <p className="text-zinc-500 text-sm mb-8">Pay via M-Pesa. Cancel anytime.</p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link href="/login?tab=signup">
               <Button size="lg" className="bg-violet-600 hover:bg-violet-500 text-white px-10 shadow-xl shadow-violet-500/30 border-0">
-                Create Free Account
+                Create Account — KSH 150/month
               </Button>
             </Link>
           </div>
-          <div className="mt-8 flex items-center justify-center gap-6 text-sm text-zinc-500">
-            {["Free to use", "No credit card", "Deploy unlimited apps"].map((t) => (
+          <div className="mt-8 flex flex-wrap items-center justify-center gap-6 text-sm text-zinc-500">
+            {["KSH 150/month", "M-Pesa payment", "Cancel anytime"].map((t) => (
               <span key={t} className="flex items-center gap-1.5">
                 <CheckCircle className="w-4 h-4 text-green-500/70" /> {t}
               </span>
@@ -254,7 +296,7 @@ export default function Landing() {
             </div>
             <span className="text-sm font-semibold text-zinc-300">Nutterx Hosting</span>
           </div>
-          <p className="text-xs text-zinc-600">© {new Date().getFullYear()} Nutterx. Built for developers who ship fast.</p>
+          <p className="text-xs text-zinc-600">© {new Date().getFullYear()} Nutterx. KSH 150/month · M-Pesa.</p>
           <div className="flex items-center gap-4">
             <Link href="/login">
               <span className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer">Sign In</span>

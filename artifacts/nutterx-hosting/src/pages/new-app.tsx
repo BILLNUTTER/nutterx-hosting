@@ -11,14 +11,27 @@ import { useLocation } from "wouter";
 import {
   Github, Terminal, ArrowRight, ArrowLeft,
   Plus, Trash2, Rocket, Loader2, Wand2,
-  CheckCircle2, Info
+  CheckCircle2, Info, CreditCard
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { PaymentModal } from "@/components/PaymentModal";
 
 export default function NewApp() {
   const [step, setStep] = useState(1);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+
+  // Billing
+  const [billingActive, setBillingActive] = useState<boolean | null>(null);
+  const [showPayment, setShowPayment] = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem("access_token") ?? "";
+    fetch("/api/billing/status", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => d && setBillingActive(d.active))
+      .catch(() => {});
+  }, []);
 
   // Form State
   const [name, setName] = useState("");
@@ -404,16 +417,34 @@ export default function NewApp() {
                   <Button variant="ghost" onClick={() => setStep(2)} disabled={isDeploying} className="gap-2">
                     <ArrowLeft className="w-4 h-4" /> Back
                   </Button>
-                  <Button size="lg" onClick={handleDeploy} disabled={isDeploying} className="gap-2 w-48 shadow-[0_0_20px_rgba(var(--primary),0.3)] hover:shadow-[0_0_30px_rgba(var(--primary),0.5)] transition-all">
-                    {isDeploying ? <Loader2 className="w-5 h-5 animate-spin" /> : <Rocket className="w-5 h-5" />}
-                    Deploy App
-                  </Button>
+                  {billingActive === false ? (
+                    <Button
+                      size="lg"
+                      onClick={() => setShowPayment(true)}
+                      className="gap-2 w-56 bg-amber-600 hover:bg-amber-500 text-white border-0 shadow-lg"
+                    >
+                      <CreditCard className="w-5 h-5" />
+                      Pay KSH 150 to Deploy
+                    </Button>
+                  ) : (
+                    <Button size="lg" onClick={handleDeploy} disabled={isDeploying} className="gap-2 w-48 shadow-[0_0_20px_rgba(var(--primary),0.3)] hover:shadow-[0_0_30px_rgba(var(--primary),0.5)] transition-all">
+                      {isDeploying ? <Loader2 className="w-5 h-5 animate-spin" /> : <Rocket className="w-5 h-5" />}
+                      Deploy App
+                    </Button>
+                  )}
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
         </Card>
       </div>
+
+      <PaymentModal
+        open={showPayment}
+        onClose={() => setShowPayment(false)}
+        onSuccess={() => setBillingActive(true)}
+        title="Pay to Deploy"
+      />
     </AppLayout>
   );
 }

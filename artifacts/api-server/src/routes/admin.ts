@@ -1,8 +1,17 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import { connectMongo, User, App, Log, PasswordResetRequest } from "@workspace/mongo";
-import { stopApp } from "../services/processManager.js";
+import {
+  connectMongo,
+  User,
+  App,
+  Log,
+  PasswordResetRequest,
+  Payment,
+  Subscription,
+  PesapalSettings,
+} from "@workspace/mongo";
+import { stopApp, buildProcs } from "../services/processManager.js";
 
 const router: IRouter = Router();
 
@@ -53,12 +62,21 @@ router.post("/admin/login", (req, res) => {
 router.get("/admin/stats", requireAdmin, async (req, res) => {
   try {
     await connectMongo();
-    const [totalUsers, totalApps, pendingResets] = await Promise.all([
+    const [totalUsers, totalApps, pendingResets, totalRevenue] = await Promise.all([
       User.countDocuments(),
       App.countDocuments(),
       PasswordResetRequest.countDocuments({ status: "pending" }),
+      Payment.aggregate([
+        { $match: { status: "completed" } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
     ]);
-    res.json({ totalUsers, totalApps, pendingResets });
+    res.json({
+      totalUsers,
+      totalApps,
+      pendingResets,
+      totalRevenue: totalRevenue[0]?.total ?? 0,
+    });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
@@ -71,23 +89,58 @@ router.get("/admin/users", requireAdmin, async (req, res) => {
     await connectMongo();
     const users = await User.find({}).sort({ createdAt: -1 }).lean();
     const userIds = users.map((u) => u._id);
-    const appCounts = await App.aggregate([
-      { $match: { owner: { $in: userIds } } },
-      { $group: { _id: "$owner", count: { $sum: 1 } } },
+
+    const [appCounts, subs] = await Promise.all([
+      App.aggregate([
+        { $match: { owner: { $in: userIds } } },
+        { $group: { _id: "$owner", count: { $sum: 1 } } },
+      ]),
+      Subscription.find({
+        userId: { $in: userIds },
+        status: "active",
+        expiresAt: { $gt: new Date() },
+      }).lean(),
     ]);
+
     const countMap: Record<string, number> = {};
-    for (const { _id, count } of appCounts) {
-      countMap[_id.toString()] = count;
-    }
+    for (const { _id, count } of appCounts) countMap[_id.toString()] = count;
+
+    const subMap: Record<string, Date> = {};
+    for (const s of subs) subMap[s.userId.toString()] = s.expiresAt;
+
     const result = users.map((u) => ({
       id: u._id.toString(),
       email: u.email,
       phone: u.phone ?? "",
       status: u.status ?? "active",
       appCount: countMap[u._id.toString()] ?? 0,
+      subscriptionActive: !!subMap[u._id.toString()],
+      subscriptionExpiry: subMap[u._id.toString()] ?? null,
       createdAt: u.createdAt,
     }));
     res.json(result);
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /api/admin/users/:id/apps
+router.get("/admin/users/:id/apps", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const apps = await App.find({ owner: req.params.id }).sort({ createdAt: -1 }).lean();
+    res.json(
+      apps.map((a) => ({
+        id: a._id.toString(),
+        name: a.name,
+        slug: a.slug,
+        repoUrl: a.repoUrl,
+        status: a.status,
+        lastDeployedAt: a.lastDeployedAt,
+        createdAt: a.createdAt,
+      }))
+    );
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
@@ -108,14 +161,12 @@ router.patch("/admin/users/:id/status", requireAdmin, async (req, res) => {
       res.status(404).json({ error: "User not found" });
       return;
     }
-
     if (status === "suspended" || status === "deactivated") {
       const apps = await App.find({ owner: user._id, status: "running" });
       await Promise.all(apps.map((a) => stopApp(a._id.toString())));
       user.refreshTokens = [];
       await user.save();
     }
-
     res.json({ id: user._id.toString(), status: user.status });
   } catch (err) {
     req.log.error(err);
@@ -138,6 +189,8 @@ router.delete("/admin/users/:id", requireAdmin, async (req, res) => {
       await Log.deleteMany({ appId: a._id });
       await a.deleteOne();
     }));
+    await Payment.deleteMany({ userId: user._id });
+    await Subscription.deleteMany({ userId: user._id });
     await user.deleteOne();
     res.json({ message: "User and all associated data deleted" });
   } catch (err) {
@@ -171,19 +224,10 @@ router.patch("/admin/password-requests/:id/resolve", requireAdmin, async (req, r
   try {
     await connectMongo();
     const request = await PasswordResetRequest.findById(req.params.id);
-    if (!request) {
-      res.status(404).json({ error: "Request not found" });
-      return;
-    }
-    if (request.status !== "pending") {
-      res.status(400).json({ error: "Request already resolved" });
-      return;
-    }
+    if (!request) { res.status(404).json({ error: "Request not found" }); return; }
+    if (request.status !== "pending") { res.status(400).json({ error: "Request already resolved" }); return; }
     const user = await User.findOne({ email: request.email });
-    if (!user) {
-      res.status(404).json({ error: "User not found" });
-      return;
-    }
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
     user.passwordHash = await bcrypt.hash(request.preferredPassword, 12);
     user.refreshTokens = [];
     await user.save();
@@ -201,10 +245,7 @@ router.patch("/admin/password-requests/:id/reject", requireAdmin, async (req, re
   try {
     await connectMongo();
     const request = await PasswordResetRequest.findById(req.params.id);
-    if (!request) {
-      res.status(404).json({ error: "Request not found" });
-      return;
-    }
+    if (!request) { res.status(404).json({ error: "Request not found" }); return; }
     request.status = "rejected";
     await request.save();
     res.json({ message: "Request rejected" });
@@ -233,6 +274,155 @@ router.get("/admin/apps", requireAdmin, async (req, res) => {
       lastDeployedAt: a.lastDeployedAt,
       createdAt: a.createdAt,
     })));
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /api/admin/users/:id/apps — deploy app on behalf of user
+router.post("/admin/users/:id/apps", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const user = await User.findById(req.params.id);
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+    const { name, repoUrl, startCommand, installCommand, port, autoRestart } =
+      req.body as {
+        name: string;
+        repoUrl: string;
+        startCommand?: string;
+        installCommand?: string;
+        port?: number;
+        autoRestart?: boolean;
+      };
+    if (!name || !repoUrl) {
+      res.status(400).json({ error: "name and repoUrl are required" });
+      return;
+    }
+    const slugify = (await import("slugify")).default;
+    const baseSlug = slugify(name, { lower: true, strict: true });
+    const existing = await App.findOne({ owner: user._id, slug: baseSlug });
+    const slug = existing ? `${baseSlug}-${Date.now()}` : baseSlug;
+    const app = await App.create({
+      owner: user._id,
+      name,
+      slug,
+      repoUrl,
+      startCommand: startCommand ?? "",
+      installCommand: installCommand ?? "",
+      port: port ?? 3000,
+      autoRestart: autoRestart ?? true,
+      status: "idle",
+    });
+    res.status(201).json({
+      id: app._id.toString(),
+      name: app.name,
+      slug: app.slug,
+      status: app.status,
+    });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// PATCH /api/admin/apps/:id/action — stop/start app as admin
+router.patch("/admin/apps/:id/action", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const { action } = req.body as { action: "stop" | "start" };
+    const app = await App.findById(req.params.id);
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+    if (action === "stop") {
+      await stopApp(app._id.toString());
+    }
+    res.json({ id: app._id.toString(), status: app.status });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /api/admin/revenue
+router.get("/admin/revenue", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const payments = await Payment.find({})
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const [total] = await Payment.aggregate([
+      { $match: { status: "completed" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
+    ]);
+
+    res.json({
+      totalRevenue: total?.total ?? 0,
+      currency: "KES",
+      payments: payments.map((p) => ({
+        id: p._id.toString(),
+        email: p.email,
+        phone: p.phone,
+        amount: p.amount,
+        currency: p.currency,
+        status: p.status,
+        pesapalOrderId: p.pesapalOrderId,
+        pesapalTrackingId: p.pesapalTrackingId,
+        createdAt: p.createdAt,
+      })),
+    });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /api/admin/settings
+router.get("/admin/settings", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    let settings = await PesapalSettings.findOne({}).lean();
+    if (!settings) {
+      settings = await PesapalSettings.create({});
+    }
+    res.json({
+      consumerKey: settings.consumerKey ?? "",
+      consumerSecret: settings.consumerSecret ? "***configured***" : "",
+      isProduction: settings.isProduction ?? false,
+      ipnId: settings.ipnId ?? "",
+      configured: !!(settings.consumerKey && settings.consumerSecret),
+    });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// PUT /api/admin/settings
+router.put("/admin/settings", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const { consumerKey, consumerSecret, isProduction } = req.body as {
+      consumerKey: string;
+      consumerSecret: string;
+      isProduction: boolean;
+    };
+    if (!consumerKey) {
+      res.status(400).json({ error: "consumerKey is required" });
+      return;
+    }
+
+    const update: Record<string, any> = { consumerKey, isProduction: isProduction ?? false };
+    if (consumerSecret && consumerSecret !== "***configured***") {
+      update.consumerSecret = consumerSecret;
+    }
+    update.ipnId = "";
+
+    const settings = await PesapalSettings.findOneAndUpdate({}, update, {
+      upsert: true,
+      new: true,
+    });
+    res.json({ message: "Settings saved", configured: true });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });

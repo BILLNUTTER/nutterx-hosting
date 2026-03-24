@@ -4,6 +4,7 @@ import pinoHttp from "pino-http";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
 import { connectMongo } from "@workspace/mongo";
+import { startSubscriptionCron } from "./services/subscriptionCron.js";
 
 const app: Express = express();
 
@@ -34,6 +35,7 @@ app.use("/api", router);
 
 connectMongo().then(() => {
   logger.info("Connected to MongoDB");
+  startSubscriptionCron();
 }).catch((err) => {
   logger.error({ err }, "Failed to connect to MongoDB");
 });
