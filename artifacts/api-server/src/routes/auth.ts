@@ -6,14 +6,24 @@ import { requireAuth } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
 
+function getJwtSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error("JWT_SECRET environment variable is not set");
+  return secret;
+}
+
+function getJwtRefreshSecret(): string {
+  const secret = process.env.JWT_REFRESH_SECRET;
+  if (!secret) throw new Error("JWT_REFRESH_SECRET environment variable is not set");
+  return secret;
+}
+
 function signAccess(userId: string, email: string) {
-  const secret = process.env.JWT_SECRET!;
-  return jwt.sign({ userId, email }, secret, { expiresIn: "15m" });
+  return jwt.sign({ userId, email }, getJwtSecret(), { expiresIn: "15m" });
 }
 
 function signRefresh(userId: string, email: string) {
-  const refreshSecret = process.env.JWT_REFRESH_SECRET!;
-  return jwt.sign({ userId, email }, refreshSecret, { expiresIn: "7d" });
+  return jwt.sign({ userId, email }, getJwtRefreshSecret(), { expiresIn: "7d" });
 }
 
 router.post("/auth/signup", async (req, res) => {

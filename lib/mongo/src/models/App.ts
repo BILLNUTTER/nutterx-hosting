@@ -1,11 +1,9 @@
 import mongoose, { type Document, type Model, Schema, type Types } from "mongoose";
+import { type IEnvVar, envVarSchema } from "./EnvVar.js";
+
+export type { IEnvVar };
 
 export type AppStatus = "idle" | "installing" | "running" | "stopped" | "crashed" | "error";
-
-export interface IEnvVar {
-  key: string;
-  value: string;
-}
 
 export interface IApp extends Document {
   _id: Types.ObjectId;
@@ -26,14 +24,6 @@ export interface IApp extends Document {
   createdAt: Date;
   updatedAt: Date;
 }
-
-const envVarSchema = new Schema<IEnvVar>(
-  {
-    key: { type: String, required: true },
-    value: { type: String, default: "" },
-  },
-  { _id: false }
-);
 
 const appSchema = new Schema<IApp>(
   {
