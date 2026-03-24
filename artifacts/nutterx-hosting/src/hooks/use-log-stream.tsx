@@ -5,17 +5,22 @@ import type { LogEntry } from "@workspace/api-client-react";
 
 export function useLogStream(appId: string) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  // Track whether the user manually cleared so we don't re-seed from cache
-  const clearedRef = useRef(false);
   const seededRef = useRef(false);
+  // sinceRef: ISO timestamp passed to SSE as ?since= so reconnects don't resend old history
+  const sinceRef = useRef<string | null>(null);
+  // Increment to force the SSE useEffect to reconnect with the latest sinceRef
+  const [connectionKey, setConnectionKey] = useState(0);
 
   const { data: initialLogs } = useGetAppLogs(appId, { limit: 200 });
 
-  // Seed with historical logs once on mount (not after manual clear)
+  // Seed with historical logs once on mount; record timestamp of last log for gap-fill
   useEffect(() => {
-    if (initialLogs && !seededRef.current && !clearedRef.current) {
+    if (initialLogs && !seededRef.current) {
       seededRef.current = true;
       setLogs(initialLogs);
+      if (initialLogs.length > 0) {
+        sinceRef.current = initialLogs[initialLogs.length - 1].timestamp;
+      }
     }
   }, [initialLogs]);
 
@@ -25,9 +30,11 @@ export function useLogStream(appId: string) {
     let retryCount = 0;
     const ctrl = new AbortController();
     const token = localStorage.getItem("access_token");
+    const since = sinceRef.current;
+    const url = `/api/apps/${appId}/logs/stream${since ? `?since=${encodeURIComponent(since)}` : ""}`;
 
     function connect() {
-      fetchEventSource(`/api/apps/${appId}/logs/stream`, {
+      fetchEventSource(url, {
         method: "GET",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -44,11 +51,12 @@ export function useLogStream(appId: string) {
           try {
             const newLog = JSON.parse(ev.data) as LogEntry;
             setLogs((prev) => {
-              if (prev.some((l) => l.id === newLog.id)) return prev;
+              // Deduplicate: SSE logs have no id so match on timestamp+line
+              if (prev.some((l) => l.timestamp === newLog.timestamp && l.line === newLog.line)) return prev;
               return [...prev, newLog];
             });
-          } catch (e) {
-            console.error("Failed to parse SSE event", e);
+          } catch {
+            // ignore parse errors (ping comments etc.)
           }
         },
         onerror(err) {
@@ -57,7 +65,7 @@ export function useLogStream(appId: string) {
           }
           retryCount++;
           return 3000;
-        }
+        },
       });
     }
 
@@ -66,11 +74,14 @@ export function useLogStream(appId: string) {
     return () => {
       ctrl.abort();
     };
-  }, [appId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appId, connectionKey]);
 
   const clearLogs = () => {
-    clearedRef.current = true;
+    // Record NOW as the new "since" — SSE will reconnect and only deliver logs after this moment
+    sinceRef.current = new Date().toISOString();
     setLogs([]);
+    setConnectionKey((k) => k + 1);
   };
 
   return { logs, clearLogs };

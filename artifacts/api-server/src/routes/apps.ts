@@ -523,13 +523,18 @@ router.get("/apps/:id/logs/stream", requireAuth, async (req: Request, res: Respo
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    const recentLogs = await Log.find({ appId: app._id })
-      .sort({ timestamp: -1 })
-      .limit(100)
-      .lean();
-
-    for (const log of recentLogs.reverse()) {
-      send({ line: log.line, stream: log.stream, timestamp: (log.timestamp as Date).toISOString() });
+    // If ?since= provided, only send logs after that timestamp (gap-fill).
+    // If not provided, send no history (caller loads history via REST).
+    const sinceRaw = req.query.since as string | undefined;
+    if (sinceRaw) {
+      const since = new Date(sinceRaw);
+      const gapLogs = await Log.find({ appId: app._id, timestamp: { $gt: since } })
+        .sort({ timestamp: 1 })
+        .limit(200)
+        .lean();
+      for (const log of gapLogs) {
+        send({ line: log.line, stream: log.stream, timestamp: (log.timestamp as Date).toISOString() });
+      }
     }
 
     const appId = (app._id as mongoose.Types.ObjectId).toString();
