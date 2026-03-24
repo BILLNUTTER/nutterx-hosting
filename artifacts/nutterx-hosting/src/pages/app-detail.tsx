@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
-import { Play, Square, RefreshCw, Trash2, Terminal, Settings, ArrowLeft, Loader2, Save, Trash, AlertCircle } from "lucide-react";
+import { Play, Square, RefreshCw, Trash2, Terminal, Settings, ArrowLeft, Loader2, Save, Trash, AlertCircle, Pencil, X } from "lucide-react";
 import { format } from "date-fns";
 import { clsx } from "clsx";
 
@@ -58,11 +58,27 @@ export default function AppDetail() {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
-  // Env vars state
+  // Env vars state — only sync from server when NOT actively editing
+  const [isEditingEnv, setIsEditingEnv] = useState(false);
   const [envForm, setEnvForm] = useState<{key: string, value: string}[]>([]);
+
   useEffect(() => {
-    if (app?.envVars) setEnvForm(app.envVars);
-  }, [app?.envVars]);
+    // Don't clobber the form while user is editing — they clicked Edit explicitly
+    if (!isEditingEnv && app?.envVars) {
+      setEnvForm(app.envVars);
+    }
+  }, [app?.envVars, isEditingEnv]);
+
+  const handleStartEdit = () => {
+    // Take a fresh snapshot of the current saved values, then enter edit mode
+    setEnvForm(app?.envVars ?? []);
+    setIsEditingEnv(true);
+  };
+
+  const handleCancelEdit = () => {
+    setEnvForm(app?.envVars ?? []);
+    setIsEditingEnv(false);
+  };
 
   const handleDelete = async () => {
     try {
@@ -79,6 +95,7 @@ export default function AppDetail() {
       await updateEnvVars({ id: id!, data: { envVars: envForm } });
       toast({ title: "Environment variables saved" });
       queryClient.invalidateQueries({ queryKey: getGetAppQueryKey(id!) });
+      setIsEditingEnv(false);
     } catch (e: any) {
       toast({ title: "Failed to save variables", description: e.message, variant: "destructive" });
     }
@@ -90,6 +107,7 @@ export default function AppDetail() {
     try {
       await updateEnvVars({ id: id!, data: { envVars: envForm } });
       toast({ title: "Variables saved — restarting app..." });
+      setIsEditingEnv(false);
       clearLogs();
       setActiveTab("logs");
       restartApp({ id: app!.id });
@@ -213,64 +231,80 @@ export default function AppDetail() {
                     <h3 className="text-lg font-bold">Environment Variables</h3>
                     <p className="text-sm text-muted-foreground">Manage secrets and configuration.</p>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <Button
-                      variant="outline"
-                      onClick={handleSaveEnv}
-                      disabled={isUpdatingEnv || isSavingAndRestarting}
-                      className="gap-2"
-                    >
-                      {isUpdatingEnv ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                      Save
+
+                  {!isEditingEnv ? (
+                    <Button variant="outline" onClick={handleStartEdit} className="gap-2 flex-shrink-0">
+                      <Pencil className="w-4 h-4" /> Edit
                     </Button>
-                    {isProcessActive && (
-                      <Button
-                        onClick={handleSaveAndRestart}
-                        disabled={isSavingAndRestarting || isUpdatingEnv}
-                        className="gap-2 bg-amber-600 hover:bg-amber-700 text-white"
-                      >
-                        {isSavingAndRestarting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                        Save & Restart
+                  ) : (
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <Button variant="ghost" onClick={handleCancelEdit} disabled={isUpdatingEnv || isSavingAndRestarting} className="gap-2 text-muted-foreground">
+                        <X className="w-4 h-4" /> Cancel
                       </Button>
-                    )}
-                  </div>
+                      <Button variant="outline" onClick={handleSaveEnv} disabled={isUpdatingEnv || isSavingAndRestarting} className="gap-2">
+                        {isUpdatingEnv ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
+                      </Button>
+                      {isProcessActive && (
+                        <Button onClick={handleSaveAndRestart} disabled={isSavingAndRestarting || isUpdatingEnv} className="gap-2 bg-amber-600 hover:bg-amber-700 text-white">
+                          {isSavingAndRestarting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                          Save & Restart
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                {isProcessActive && (
+                {isEditingEnv && isProcessActive && (
                   <div className="flex items-start gap-2 text-sm text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2.5 mb-5">
                     <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                    <span>Your app is currently running. Changes to environment variables take effect after a restart. Use <strong>Save & Restart</strong> to apply them immediately.</span>
+                    <span>Your app is live. Use <strong>Save & Restart</strong> to apply changes immediately.</span>
                   </div>
                 )}
-                
-                <div className="space-y-3">
-                  {envForm.map((ev, i) => (
-                    <div key={i} className="flex items-start gap-3">
-                      <Input 
-                        placeholder="KEY" 
-                        value={ev.key} 
-                        onChange={e => {
-                          const n = [...envForm]; n[i].key = e.target.value; setEnvForm(n);
-                        }} 
-                        className="font-mono text-sm bg-black/20 flex-1"
-                      />
-                      <Input 
-                        placeholder="VALUE" 
-                        value={ev.value} 
-                        onChange={e => {
-                          const n = [...envForm]; n[i].value = e.target.value; setEnvForm(n);
-                        }} 
-                        className="font-mono text-sm bg-black/20 flex-[2]"
-                      />
-                      <Button variant="ghost" size="icon" onClick={() => setEnvForm(envForm.filter((_, idx) => idx !== i))} className="text-muted-foreground hover:text-destructive">
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  ))}
-                  <Button variant="outline" onClick={() => setEnvForm([...envForm, { key: "", value: "" }])} className="w-full border-dashed mt-2">
-                    + Add Variable
-                  </Button>
-                </div>
+
+                {!isEditingEnv ? (
+                  /* Read-only view */
+                  <div className="space-y-2">
+                    {envForm.length === 0 ? (
+                      <p className="text-sm text-muted-foreground italic">No environment variables configured.</p>
+                    ) : (
+                      envForm.map((ev, i) => (
+                        <div key={i} className="flex items-center gap-3 font-mono text-sm bg-black/20 border border-border rounded-md px-3 py-2">
+                          <span className="text-primary font-medium flex-1 truncate">{ev.key}</span>
+                          <span className="text-muted-foreground text-xs select-none">••••••••</span>
+                        </div>
+                      ))
+                    )}
+                    <Button variant="outline" onClick={handleStartEdit} className="w-full border-dashed mt-2 gap-2">
+                      <Pencil className="w-3.5 h-3.5" /> Edit Variables
+                    </Button>
+                  </div>
+                ) : (
+                  /* Edit mode */
+                  <div className="space-y-3">
+                    {envForm.map((ev, i) => (
+                      <div key={i} className="flex items-start gap-3">
+                        <Input
+                          placeholder="KEY"
+                          value={ev.key}
+                          onChange={e => { const n = [...envForm]; n[i] = { ...n[i], key: e.target.value }; setEnvForm(n); }}
+                          className="font-mono text-sm bg-black/20 flex-1"
+                        />
+                        <Input
+                          placeholder="VALUE"
+                          value={ev.value}
+                          onChange={e => { const n = [...envForm]; n[i] = { ...n[i], value: e.target.value }; setEnvForm(n); }}
+                          className="font-mono text-sm bg-black/20 flex-[2]"
+                        />
+                        <Button variant="ghost" size="icon" onClick={() => setEnvForm(envForm.filter((_, idx) => idx !== i))} className="text-muted-foreground hover:text-destructive flex-shrink-0">
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button variant="outline" onClick={() => setEnvForm([...envForm, { key: "", value: "" }])} className="w-full border-dashed mt-2">
+                      + Add Variable
+                    </Button>
+                  </div>
+                )}
               </Card>
 
               <Card className="p-6 border-destructive/20 bg-destructive/5">
