@@ -191,64 +191,117 @@ export default function AppDetail() {
         </TabsList>
 
         <TabsContent value="logs" className="mt-0 outline-none">
-          <Card className="bg-[#0a0a0a] border-white/10 shadow-2xl overflow-hidden flex flex-col h-[calc(100vh-280px)] min-h-[500px]">
-            <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 bg-white/[0.02]">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-red-500" />
-                <div className="w-2 h-2 rounded-full bg-yellow-500" />
-                <div className="w-2 h-2 rounded-full bg-green-500" />
-                <span className="text-xs text-zinc-500 font-mono ml-2">bash - {app.slug}</span>
-              </div>
-              <Button variant="ghost" size="sm" onClick={clearLogs} className="h-6 text-xs text-zinc-500 hover:text-white">
-                <Trash className="w-3 h-3 mr-1.5" /> Clear
-              </Button>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            {/* Terminal — centered square */}
+            <div className="lg:col-span-2">
+              <Card className="bg-[#0a0a0a] border-white/10 shadow-2xl overflow-hidden flex flex-col h-[460px]">
+                <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 bg-white/[0.02]">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-red-500" />
+                    <div className="w-2 h-2 rounded-full bg-yellow-500" />
+                    <div className="w-2 h-2 rounded-full bg-green-500" />
+                    <span className="text-xs text-zinc-500 font-mono ml-2">bash — {app.slug}</span>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={clearLogs} className="h-6 text-xs text-zinc-500 hover:text-white">
+                    <Trash className="w-3 h-3 mr-1.5" /> Clear
+                  </Button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 font-mono text-[13px] leading-relaxed custom-scrollbar">
+                  {logs.length === 0 ? (
+                    <div className="text-zinc-600 italic">Waiting for logs...</div>
+                  ) : (() => {
+                    const isCrashed = app.status === 'crashed';
+                    const displayedLogs = isCrashed && !showAllCrashLogs ? logs.slice(-2) : logs;
+                    const hiddenCount = logs.length - displayedLogs.length;
+                    return (
+                      <>
+                        {isCrashed && hiddenCount > 0 && (
+                          <button
+                            onClick={() => setShowAllCrashLogs(true)}
+                            className="w-full text-center text-xs text-zinc-500 hover:text-zinc-300 bg-white/[0.03] border border-white/10 rounded py-1.5 mb-3 transition-colors"
+                          >
+                            ↑ Show {hiddenCount} earlier log {hiddenCount === 1 ? "line" : "lines"}
+                          </button>
+                        )}
+                        {displayedLogs.map((log, i) => (
+                          <div key={log.id ?? `${log.timestamp}-${i}`} className="flex gap-4 hover:bg-white/5 px-2 rounded -mx-2 group">
+                            <span className="text-zinc-600 select-none flex-shrink-0 opacity-50 group-hover:opacity-100 transition-opacity">
+                              {format(new Date(log.timestamp), 'HH:mm:ss')}
+                            </span>
+                            <span className={clsx(
+                              "flex-1 break-all",
+                              log.stream === 'stderr' ? 'text-red-400' :
+                              log.stream === 'system' ? 'text-amber-400' : 'text-zinc-300'
+                            )}>
+                              {log.line}
+                            </span>
+                          </div>
+                        ))}
+                        {isCrashed && showAllCrashLogs && (
+                          <button
+                            onClick={() => setShowAllCrashLogs(false)}
+                            className="w-full text-center text-xs text-zinc-500 hover:text-zinc-300 bg-white/[0.03] border border-white/10 rounded py-1.5 mt-3 transition-colors"
+                          >
+                            ↑ Collapse to last 2 lines
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
+                  <div ref={logsEndRef} />
+                </div>
+              </Card>
             </div>
-            
-            <div className="flex-1 overflow-y-auto p-4 font-mono text-[13px] leading-relaxed custom-scrollbar">
-              {logs.length === 0 ? (
-                <div className="text-zinc-600 italic">Waiting for logs...</div>
-              ) : (() => {
-                const isCrashed = app.status === 'crashed';
-                const displayedLogs = isCrashed && !showAllCrashLogs ? logs.slice(-2) : logs;
-                const hiddenCount = logs.length - displayedLogs.length;
-                return (
-                  <>
-                    {isCrashed && hiddenCount > 0 && (
-                      <button
-                        onClick={() => setShowAllCrashLogs(true)}
-                        className="w-full text-center text-xs text-zinc-500 hover:text-zinc-300 bg-white/[0.03] border border-white/10 rounded py-1.5 mb-3 transition-colors"
-                      >
-                        ↑ Show {hiddenCount} earlier log {hiddenCount === 1 ? "line" : "lines"}
-                      </button>
-                    )}
-                    {displayedLogs.map((log, i) => (
-                      <div key={log.id ?? `${log.timestamp}-${i}`} className="flex gap-4 hover:bg-white/5 px-2 rounded -mx-2 group">
-                        <span className="text-zinc-600 select-none flex-shrink-0 opacity-50 group-hover:opacity-100 transition-opacity">
-                          {format(new Date(log.timestamp), 'HH:mm:ss')}
-                        </span>
-                        <span className={clsx(
-                          "flex-1 break-all",
-                          log.stream === 'stderr' ? 'text-red-400' :
-                          log.stream === 'system' ? 'text-amber-400' : 'text-zinc-300'
-                        )}>
-                          {log.line}
-                        </span>
-                      </div>
-                    ))}
-                    {isCrashed && showAllCrashLogs && (
-                      <button
-                        onClick={() => setShowAllCrashLogs(false)}
-                        className="w-full text-center text-xs text-zinc-500 hover:text-zinc-300 bg-white/[0.03] border border-white/10 rounded py-1.5 mt-3 transition-colors"
-                      >
-                        ↑ Collapse to last 2 lines
-                      </button>
-                    )}
-                  </>
-                );
-              })()}
-              <div ref={logsEndRef} />
+
+            {/* Guidelines panel */}
+            <div className="space-y-4">
+              <Card className="p-4">
+                <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                  Log Colours
+                </h3>
+                <ul className="space-y-2 text-xs">
+                  <li className="flex items-start gap-2"><span className="w-2 h-2 rounded-full bg-zinc-400 flex-shrink-0 mt-1" /><span className="text-muted-foreground"><strong className="text-zinc-300">White</strong> — normal stdout output from your app.</span></li>
+                  <li className="flex items-start gap-2"><span className="w-2 h-2 rounded-full bg-red-400 flex-shrink-0 mt-1" /><span className="text-muted-foreground"><strong className="text-red-400">Red</strong> — stderr messages (errors, warnings from Node.js).</span></li>
+                  <li className="flex items-start gap-2"><span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0 mt-1" /><span className="text-muted-foreground"><strong className="text-amber-400">Amber</strong> — platform messages (install, start, restart events).</span></li>
+                </ul>
+              </Card>
+
+              <Card className="p-4">
+                <h3 className="text-sm font-semibold mb-3">Common Issues</h3>
+                <ul className="space-y-3 text-xs text-muted-foreground">
+                  <li>
+                    <p className="font-medium text-foreground mb-0.5">App crashes immediately</p>
+                    <p>Check your start command in Settings. The default is <code className="bg-muted/40 px-1 rounded font-mono">node index.js</code> — adjust to match your entry file.</p>
+                  </li>
+                  <li>
+                    <p className="font-medium text-foreground mb-0.5">Missing environment variable</p>
+                    <p>Add secrets in the <strong>Settings &amp; Env</strong> tab and use <strong>Save &amp; Restart</strong> to apply them without redeploying.</p>
+                  </li>
+                  <li>
+                    <p className="font-medium text-foreground mb-0.5">Port not responding</p>
+                    <p>Make your app listen on the <code className="bg-muted/40 px-1 rounded font-mono">PORT</code> environment variable: <code className="bg-muted/40 px-1 rounded font-mono">process.env.PORT</code>.</p>
+                  </li>
+                  <li>
+                    <p className="font-medium text-foreground mb-0.5">Dependency install fails</p>
+                    <p>Ensure your <code className="bg-muted/40 px-1 rounded font-mono">package.json</code> is at the root of the repo and the start script is correctly defined.</p>
+                  </li>
+                </ul>
+              </Card>
+
+              <Card className="p-4">
+                <h3 className="text-sm font-semibold mb-3">Quick Tips</h3>
+                <ul className="space-y-2 text-xs text-muted-foreground list-disc list-inside">
+                  <li>Use <strong>Restart</strong> to redeploy from the latest commit.</li>
+                  <li>Logs are live — they stream in real time via SSE.</li>
+                  <li>The <strong>Clear</strong> button only hides logs in this session; history is preserved.</li>
+                  <li>Apps run on Node.js 20. Use <code className="bg-muted/40 px-1 rounded font-mono">.nvmrc</code> or <code className="bg-muted/40 px-1 rounded font-mono">engines</code> in package.json for version hints.</li>
+                  <li>Your app is accessible at <code className="bg-muted/40 px-1 rounded font-mono">{app.slug}.nutterxhost.com</code></li>
+                </ul>
+              </Card>
             </div>
-          </Card>
+          </div>
         </TabsContent>
 
         <TabsContent value="settings" className="mt-0 outline-none">

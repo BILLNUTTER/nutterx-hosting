@@ -11,7 +11,12 @@ import {
   Subscription,
   PesapalSettings,
 } from "@workspace/mongo";
-import { stopApp, buildProcs } from "../services/processManager.js";
+import slugify from "slugify";
+import mongoose from "mongoose";
+import { startApp, stopApp, restartApp, subscribeToLogs } from "../services/processManager.js";
+
+// All apps owned by the admin use this fixed synthetic ObjectId as their "owner"
+const ADMIN_OWNER_ID = new mongoose.Types.ObjectId("000000000000000000000001");
 
 const router: IRouter = Router();
 
@@ -364,6 +369,182 @@ router.post("/admin/users/:id/subscription", requireAdmin, async (req, res) => {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
   }
+});
+
+// DELETE /api/admin/users/:id/subscription — deactivate a user's active subscription
+router.delete("/admin/users/:id/subscription", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const user = await User.findById(req.params.id).lean();
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+    const result = await Subscription.updateMany(
+      { userId: user._id.toString(), status: "active" },
+      { $set: { status: "cancelled" } }
+    );
+    res.json({ message: "Subscription deactivated", modified: result.modifiedCount });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ── Admin's own apps ─────────────────────────────────────────────────────────
+
+function toAdminAppJson(app: InstanceType<typeof App>) {
+  return {
+    id: (app._id as mongoose.Types.ObjectId).toString(),
+    name: app.name,
+    slug: app.slug,
+    repoUrl: app.repoUrl,
+    branch: app.branch ?? "main",
+    status: app.status,
+    startCommand: app.startCommand,
+    installCommand: app.installCommand,
+    port: app.port,
+    autoRestart: app.autoRestart,
+    envVars: (app.envVars ?? []).map((e: { key: string; value: string }) => ({ key: e.key, value: e.value })),
+    lastDeployedAt: app.lastDeployedAt?.toISOString(),
+    createdAt: (app.createdAt as Date).toISOString(),
+  };
+}
+
+// GET /api/admin/my-apps
+router.get("/admin/my-apps", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const apps = await App.find({ owner: ADMIN_OWNER_ID }).sort({ createdAt: -1 }).lean();
+    res.json(apps.map((a) => ({
+      id: a._id.toString(), name: a.name, slug: a.slug, repoUrl: a.repoUrl,
+      status: a.status, lastDeployedAt: a.lastDeployedAt?.toISOString(), createdAt: (a.createdAt as Date).toISOString(),
+    })));
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+});
+
+// POST /api/admin/my-apps — create + immediately deploy an admin app
+router.post("/admin/my-apps", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const { name, repoUrl, branch, startCommand, installCommand, port, envVars } = req.body as {
+      name: string; repoUrl: string; branch?: string; startCommand?: string;
+      installCommand?: string; port?: number; envVars?: { key: string; value: string }[];
+    };
+    if (!name || !repoUrl) { res.status(400).json({ error: "name and repoUrl are required" }); return; }
+
+    let base = slugify(name, { lower: true, strict: true }) || "admin-app";
+    let slug = base; let counter = 1;
+    while (await App.exists({ slug })) { slug = `${base}-${counter++}`; }
+
+    const app = await App.create({
+      owner: ADMIN_OWNER_ID, name, repoUrl, branch: branch ?? "main",
+      slug, status: "idle", autoRestart: false,
+      ...(startCommand ? { startCommand } : {}),
+      ...(installCommand ? { installCommand } : {}),
+      ...(port ? { port } : {}),
+      envVars: envVars ?? [],
+    });
+
+    // Start deployment immediately (fire and forget)
+    startApp(app._id.toString()).catch(() => {});
+    res.status(201).json(toAdminAppJson(app));
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+});
+
+// GET /api/admin/my-apps/:id
+router.get("/admin/my-apps/:id", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const app = await App.findOne({ _id: req.params.id, owner: ADMIN_OWNER_ID });
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+    res.json(toAdminAppJson(app));
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+});
+
+// DELETE /api/admin/my-apps/:id
+router.delete("/admin/my-apps/:id", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const app = await App.findOne({ _id: req.params.id, owner: ADMIN_OWNER_ID });
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+    await stopApp(app._id.toString());
+    await Log.deleteMany({ appId: app._id });
+    await App.deleteOne({ _id: app._id });
+    res.json({ message: "App deleted" });
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+});
+
+// POST /api/admin/my-apps/:id/start
+router.post("/admin/my-apps/:id/start", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const app = await App.findOne({ _id: req.params.id, owner: ADMIN_OWNER_ID });
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+    startApp(app._id.toString()).catch(() => {});
+    res.json({ message: "Start initiated" });
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+});
+
+// POST /api/admin/my-apps/:id/stop
+router.post("/admin/my-apps/:id/stop", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const app = await App.findOne({ _id: req.params.id, owner: ADMIN_OWNER_ID });
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+    await stopApp(app._id.toString());
+    res.json({ message: "App stopped" });
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+});
+
+// POST /api/admin/my-apps/:id/restart
+router.post("/admin/my-apps/:id/restart", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const app = await App.findOne({ _id: req.params.id, owner: ADMIN_OWNER_ID });
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+    restartApp(app._id.toString()).catch(() => {});
+    res.json({ message: "Restart initiated" });
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+});
+
+// GET /api/admin/my-apps/:id/logs/stream — SSE for admin app logs
+// Uses ?token= query param because native EventSource cannot set headers
+router.get("/admin/my-apps/:id/logs/stream", async (req, res) => {
+  // Inline admin auth that also accepts ?token= for EventSource compatibility
+  const token = (req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : null)
+    ?? (typeof req.query.token === "string" ? req.query.token : null);
+  if (!token) { res.status(401).json({ error: "Admin authentication required" }); return; }
+  try { const p = jwt.verify(token, getJwtSecret()) as { role?: string }; if (p.role !== "admin") { res.status(403).json({ error: "Admin access required" }); return; } }
+  catch { res.status(401).json({ error: "Invalid or expired admin token" }); return; }
+
+  try {
+    await connectMongo();
+    const app = await App.findOne({ _id: req.params.id, owner: ADMIN_OWNER_ID });
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const flush = () => { if (typeof (res as any).flush === "function") (res as any).flush(); };
+    const send = (data: unknown) => { res.write(`data: ${JSON.stringify(data)}\n\n`); flush(); };
+
+    const sinceRaw = req.query.since as string | undefined;
+    if (sinceRaw) {
+      const since = new Date(sinceRaw);
+      const gapLogs = await Log.find({ appId: app._id, timestamp: { $gt: since } }).sort({ timestamp: 1 }).limit(200).lean();
+      for (const log of gapLogs) send({ line: log.line, stream: log.stream, timestamp: (log.timestamp as Date).toISOString() });
+    } else {
+      const history = await Log.find({ appId: app._id }).sort({ timestamp: -1 }).limit(100).lean();
+      for (const log of history.reverse()) send({ line: log.line, stream: log.stream, timestamp: (log.timestamp as Date).toISOString() });
+    }
+
+    const appId = (app._id as mongoose.Types.ObjectId).toString();
+    const unsubscribe = subscribeToLogs(appId, (ev) => send({ line: ev.line, stream: ev.stream, timestamp: ev.timestamp.toISOString() }));
+    const keepAlive = setInterval(() => { res.write(": ping\n\n"); flush(); }, 15000);
+
+    req.on("close", () => { unsubscribe(); clearInterval(keepAlive); });
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
 // PATCH /api/admin/apps/:id/action — stop/start app as admin

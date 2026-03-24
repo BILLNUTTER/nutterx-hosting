@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,15 +19,15 @@ import {
   DialogFooter,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { Card } from "@/components/ui/card";
 import {
   Terminal, Loader2, Users, Server, KeyRound, LogOut, MoreVertical,
   CheckCircle2, XCircle, RefreshCw, Trash2, ShieldOff, ShieldCheck,
   ShieldAlert, ChevronDown, ChevronRight, Rocket, CreditCard, Settings2,
-  TrendingUp, Eye, EyeOff, Plus, AlertTriangle, Zap
+  TrendingUp, Eye, EyeOff, Plus, AlertTriangle, Zap, Play, Square,
+  BookOpen, HelpCircle, Activity
 } from "lucide-react";
-import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
-import { clsx } from "clsx";
 
 const ADMIN_TOKEN_KEY = "nutterx_admin_token";
 const _nativeFetch: typeof fetch = window.fetch.bind(window);
@@ -104,6 +104,25 @@ export default function Admin() {
   // Manual subscription
   const [grantSubUserId, setGrantSubUserId] = useState<string | null>(null);
   const [isGrantingSub, setIsGrantingSub] = useState(false);
+  const [deactivateSubUserId, setDeactivateSubUserId] = useState<string | null>(null);
+  const [isDeactivatingSub, setIsDeactivatingSub] = useState(false);
+
+  // Admin's own apps
+  type AdminOwnApp = { id: string; name: string; slug: string; repoUrl: string; status: string; lastDeployedAt?: string; createdAt: string };
+  type AdminLogLine = { line: string; stream: string; timestamp: string };
+  const [adminApps, setAdminApps] = useState<AdminOwnApp[]>([]);
+  const [isLoadingAdminApps, setIsLoadingAdminApps] = useState(false);
+  const [newAppName, setNewAppName] = useState("");
+  const [newAppRepo, setNewAppRepo] = useState("");
+  const [newAppBranch, setNewAppBranch] = useState("main");
+  const [newAppStart, setNewAppStart] = useState("");
+  const [newAppInstall, setNewAppInstall] = useState("");
+  const [isCreatingAdminApp, setIsCreatingAdminApp] = useState(false);
+  const [selectedAdminAppId, setSelectedAdminAppId] = useState<string | null>(null);
+  const [adminLogs, setAdminLogs] = useState<AdminLogLine[]>([]);
+  const [adminAppAction, setAdminAppAction] = useState<string | null>(null);
+  const adminLogEndRef = useRef<HTMLDivElement>(null);
+  const adminEsRef = useRef<EventSource | null>(null);
 
   // Deploy for user
   const [deployUserId, setDeployUserId] = useState<string | null>(null);
@@ -287,11 +306,108 @@ export default function Admin() {
     try {
       const res = await adminFetch(`/api/admin/users/${userId}/subscription`, { method: "POST" });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
+      setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, subscriptionActive: true } : u));
       toast({ title: "Subscription activated", description: `30-day subscription granted to ${email}.` });
     } catch (err: any) {
       toast({ title: "Failed", description: err.message, variant: "destructive" });
     } finally { setGrantSubUserId(null); setIsGrantingSub(false); }
   };
+
+  const handleDeactivateSubscription = async (userId: string, email: string) => {
+    setDeactivateSubUserId(userId);
+    setIsDeactivatingSub(true);
+    try {
+      const res = await adminFetch(`/api/admin/users/${userId}/subscription`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
+      setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, subscriptionActive: false } : u));
+      toast({ title: "Subscription deactivated", description: `${email}'s subscription has been cancelled.` });
+    } catch (err: any) {
+      toast({ title: "Failed", description: err.message, variant: "destructive" });
+    } finally { setDeactivateSubUserId(null); setIsDeactivatingSub(false); }
+  };
+
+  const loadAdminApps = useCallback(async () => {
+    setIsLoadingAdminApps(true);
+    try {
+      const res = await adminFetch("/api/admin/my-apps");
+      if (res.ok) setAdminApps(await res.json());
+    } catch {} finally { setIsLoadingAdminApps(false); }
+  }, []);
+
+  const handleCreateAdminApp = async () => {
+    if (!newAppName || !newAppRepo) return;
+    setIsCreatingAdminApp(true);
+    try {
+      const res = await adminFetch("/api/admin/my-apps", {
+        method: "POST",
+        body: JSON.stringify({ name: newAppName, repoUrl: newAppRepo, branch: newAppBranch || "main", startCommand: newAppStart, installCommand: newAppInstall }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
+      const app = await res.json();
+      setAdminApps((prev) => [app, ...prev]);
+      setNewAppName(""); setNewAppRepo(""); setNewAppBranch("main"); setNewAppStart(""); setNewAppInstall("");
+      setSelectedAdminAppId(app.id);
+      toast({ title: "App created", description: `${app.name} is deploying...` });
+    } catch (err: any) {
+      toast({ title: "Failed", description: err.message, variant: "destructive" });
+    } finally { setIsCreatingAdminApp(false); }
+  };
+
+  const handleAdminAppAction = async (id: string, action: "start" | "stop" | "restart") => {
+    setAdminAppAction(id + action);
+    try {
+      const res = await adminFetch(`/api/admin/my-apps/${id}/${action}`, { method: "POST" });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
+      toast({ title: `${action.charAt(0).toUpperCase() + action.slice(1)} initiated` });
+      // Refresh app list after a short delay
+      setTimeout(() => loadAdminApps(), 2000);
+    } catch (err: any) {
+      toast({ title: "Failed", description: err.message, variant: "destructive" });
+    } finally { setAdminAppAction(null); }
+  };
+
+  const handleDeleteAdminApp = async (id: string, name: string) => {
+    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    try {
+      const res = await adminFetch(`/api/admin/my-apps/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
+      setAdminApps((prev) => prev.filter((a) => a.id !== id));
+      if (selectedAdminAppId === id) { setSelectedAdminAppId(null); setAdminLogs([]); }
+      toast({ title: "App deleted" });
+    } catch (err: any) {
+      toast({ title: "Failed", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const openAdminLogs = useCallback((appId: string) => {
+    if (adminEsRef.current) { adminEsRef.current.close(); adminEsRef.current = null; }
+    setAdminLogs([]);
+    setSelectedAdminAppId(appId);
+    const token = sessionStorage.getItem(ADMIN_TOKEN_KEY);
+    const es = new EventSource(`/api/admin/my-apps/${appId}/logs/stream?token=${token}`);
+    adminEsRef.current = es;
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        setAdminLogs((prev) => [...prev.slice(-500), data]);
+      } catch {}
+    };
+    es.onerror = () => { es.close(); adminEsRef.current = null; };
+  }, []);
+
+  useEffect(() => {
+    if (selectedAdminAppId) adminLogEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [adminLogs, selectedAdminAppId]);
+
+  // Poll admin app statuses when "My Apps" tab is active
+  useEffect(() => {
+    if (!isAuthenticated || adminApps.length === 0) return;
+    const interval = setInterval(async () => {
+      const res = await adminFetch("/api/admin/my-apps").catch(() => null);
+      if (res?.ok) { const data = await res.json(); setAdminApps(data); }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [isAuthenticated, adminApps.length]);
 
   const handleSaveSettings = async () => {
     const trimmedKey = settingsKey.trim();
@@ -440,6 +556,12 @@ export default function Admin() {
               )}
             </TabsTrigger>
             <TabsTrigger value="revenue">Revenue</TabsTrigger>
+            <TabsTrigger value="my-apps" onClick={() => { if (adminApps.length === 0) loadAdminApps(); }}>
+              My Apps
+              {adminApps.length > 0 && (
+                <span className="ml-1.5 bg-violet-500/20 text-violet-400 text-[10px] px-1.5 py-0.5 rounded-full">{adminApps.length}</span>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </TabsList>
 
@@ -526,7 +648,7 @@ export default function Admin() {
                           <td colSpan={8} className="px-6 py-4">
                             <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
                               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Apps for {user.email}</p>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <Button
                                   size="sm"
                                   variant="outline"
@@ -539,6 +661,20 @@ export default function Admin() {
                                     : <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />}
                                   Activate 30-day Sub
                                 </Button>
+                                {user.subscriptionActive && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs gap-1.5 text-destructive hover:bg-destructive/10 border-destructive/30 hover:border-destructive/50"
+                                    onClick={() => handleDeactivateSubscription(user.id, user.email)}
+                                    disabled={isDeactivatingSub && deactivateSubUserId === user.id}
+                                  >
+                                    {isDeactivatingSub && deactivateSubUserId === user.id
+                                      ? <Loader2 className="w-3 h-3 animate-spin" />
+                                      : <XCircle className="w-3.5 h-3.5" />}
+                                    Deactivate Sub
+                                  </Button>
+                                )}
                                 <Button
                                   size="sm"
                                   variant="outline"
@@ -701,6 +837,181 @@ export default function Admin() {
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading revenue data…
               </div>
             )}
+          </TabsContent>
+
+          {/* ── My Apps Tab ── */}
+          <TabsContent value="my-apps">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Left column: app list + create form */}
+              <div className="space-y-4">
+                {/* Create new app */}
+                <Card className="p-4 space-y-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Rocket className="w-4 h-4 text-primary" />
+                    <h3 className="font-semibold text-sm">Deploy New App</h3>
+                  </div>
+                  <div className="space-y-2">
+                    <Input
+                      placeholder="App name"
+                      value={newAppName}
+                      onChange={(e) => setNewAppName(e.target.value)}
+                      className="text-sm"
+                    />
+                    <Input
+                      placeholder="GitHub repo URL"
+                      value={newAppRepo}
+                      onChange={(e) => setNewAppRepo(e.target.value)}
+                      className="text-sm font-mono"
+                    />
+                    <Input
+                      placeholder="Branch (default: main)"
+                      value={newAppBranch}
+                      onChange={(e) => setNewAppBranch(e.target.value)}
+                      className="text-sm"
+                    />
+                    <Input
+                      placeholder="Start command (optional)"
+                      value={newAppStart}
+                      onChange={(e) => setNewAppStart(e.target.value)}
+                      className="text-sm font-mono"
+                    />
+                    <Input
+                      placeholder="Install command (optional)"
+                      value={newAppInstall}
+                      onChange={(e) => setNewAppInstall(e.target.value)}
+                      className="text-sm font-mono"
+                    />
+                  </div>
+                  <Button
+                    className="w-full gap-2"
+                    disabled={!newAppName || !newAppRepo || isCreatingAdminApp}
+                    onClick={handleCreateAdminApp}
+                  >
+                    {isCreatingAdminApp ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                    Deploy App
+                  </Button>
+                </Card>
+
+                {/* App list */}
+                <Card className="p-0 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">My Apps</span>
+                    <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={loadAdminApps} disabled={isLoadingAdminApps}>
+                      <RefreshCw className={clsx("w-3 h-3", isLoadingAdminApps && "animate-spin")} />
+                    </Button>
+                  </div>
+                  {adminApps.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-8 px-4 italic">No apps yet. Deploy one above.</p>
+                  ) : (
+                    <div className="divide-y divide-border/50">
+                      {adminApps.map((app) => (
+                        <div
+                          key={app.id}
+                          className={clsx(
+                            "flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-white/[0.02] transition-colors",
+                            selectedAdminAppId === app.id && "bg-primary/5 border-l-2 border-l-primary"
+                          )}
+                          onClick={() => openAdminLogs(app.id)}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{app.name}</p>
+                            <span className={clsx("text-[10px] px-1.5 py-0.5 rounded-full border capitalize", APP_STATUS_COLOR[app.status] ?? APP_STATUS_COLOR.idle)}>
+                              {app.status}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                            {app.status !== "running" && app.status !== "installing" ? (
+                              <Button
+                                size="icon" variant="ghost"
+                                className="h-6 w-6 text-green-500 hover:bg-green-500/10"
+                                disabled={adminAppAction === app.id + "start"}
+                                onClick={() => handleAdminAppAction(app.id, "start")}
+                              >
+                                {adminAppAction === app.id + "start" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+                              </Button>
+                            ) : (
+                              <Button
+                                size="icon" variant="ghost"
+                                className="h-6 w-6 text-destructive hover:bg-destructive/10"
+                                disabled={adminAppAction === app.id + "stop"}
+                                onClick={() => handleAdminAppAction(app.id, "stop")}
+                              >
+                                {adminAppAction === app.id + "stop" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Square className="w-3 h-3" />}
+                              </Button>
+                            )}
+                            <Button
+                              size="icon" variant="ghost"
+                              className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                              disabled={adminAppAction === app.id + "restart"}
+                              onClick={() => handleAdminAppAction(app.id, "restart")}
+                            >
+                              {adminAppAction === app.id + "restart" ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                            </Button>
+                            <Button
+                              size="icon" variant="ghost"
+                              className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                              onClick={() => handleDeleteAdminApp(app.id, app.name)}
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              </div>
+
+              {/* Right: log terminal */}
+              <div className="lg:col-span-2">
+                {selectedAdminAppId ? (
+                  <Card className="bg-[#0a0a0a] border-white/10 shadow-2xl overflow-hidden flex flex-col h-[600px]">
+                    <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 bg-white/[0.02]">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-red-500" />
+                        <div className="w-2 h-2 rounded-full bg-yellow-500" />
+                        <div className="w-2 h-2 rounded-full bg-green-500" />
+                        <span className="text-xs text-zinc-500 font-mono ml-2">
+                          {adminApps.find((a) => a.id === selectedAdminAppId)?.name ?? "app"} — logs
+                        </span>
+                      </div>
+                      <Button variant="ghost" size="sm" onClick={() => { setAdminLogs([]); }} className="h-6 text-xs text-zinc-500 hover:text-white">
+                        Clear
+                      </Button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 font-mono text-[13px] leading-relaxed custom-scrollbar">
+                      {adminLogs.length === 0 ? (
+                        <p className="text-zinc-600 italic">Waiting for logs…</p>
+                      ) : (
+                        adminLogs.map((log, i) => (
+                          <div key={i} className="flex gap-4 hover:bg-white/5 px-2 rounded -mx-2">
+                            <span className="text-zinc-600 select-none flex-shrink-0 text-[11px] mt-0.5">
+                              {format(new Date(log.timestamp), "HH:mm:ss")}
+                            </span>
+                            <span className={clsx(
+                              "flex-1 break-all",
+                              log.stream === "stderr" ? "text-red-400" :
+                              log.stream === "system" ? "text-amber-400" : "text-zinc-300"
+                            )}>
+                              {log.line}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                      <div ref={adminLogEndRef} />
+                    </div>
+                  </Card>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-[600px] border border-dashed border-border rounded-2xl text-center px-8 gap-4">
+                    <Activity className="w-10 h-10 text-muted-foreground/40" />
+                    <div>
+                      <p className="font-semibold text-muted-foreground">Select an app to view logs</p>
+                      <p className="text-sm text-muted-foreground/60 mt-1">Click any app on the left to stream its live output here.</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </TabsContent>
 
           {/* ── Settings Tab ── */}
