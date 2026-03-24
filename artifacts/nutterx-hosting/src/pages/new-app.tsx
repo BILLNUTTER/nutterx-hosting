@@ -9,8 +9,8 @@ import { useCreateApp } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import {
-  Github, KeyRound, Terminal, ArrowRight, ArrowLeft,
-  Plus, Trash2, Rocket, Loader2, GitBranch, Wand2,
+  Github, Terminal, ArrowRight, ArrowLeft,
+  Plus, Trash2, Rocket, Loader2, Wand2,
   CheckCircle2, Info
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -23,8 +23,6 @@ export default function NewApp() {
   // Form State
   const [name, setName] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
-  const [branch, setBranch] = useState("main");
-  const [pat, setPat] = useState("");
   const [startCommand, setStartCommand] = useState("");
   const [installCommand, setInstallCommand] = useState("");
   const [port, setPort] = useState("");
@@ -47,8 +45,7 @@ export default function NewApp() {
     setIsFetchingEnv(true);
     setEnvFetchStatus("idle");
     try {
-      const params = new URLSearchParams({ repoUrl, branch });
-      if (pat) params.set("pat", pat);
+      const params = new URLSearchParams({ repoUrl });
       const resp = await fetch(`/api/apps/env-template?${params}`, {
         headers: { Authorization: `Bearer ${getToken()}` },
       });
@@ -78,8 +75,7 @@ export default function NewApp() {
     if (!repoUrl) return;
     setIsFetchingMeta(true);
     try {
-      const params = new URLSearchParams({ repoUrl, branch });
-      if (pat) params.set("pat", pat);
+      const params = new URLSearchParams({ repoUrl });
       const resp = await fetch(`/api/apps/repo-meta?${params}`, {
         headers: { Authorization: `Bearer ${getToken()}` },
       });
@@ -142,8 +138,6 @@ export default function NewApp() {
         data: {
           name: name.trim(),
           repoUrl: repoUrl.trim(),
-          branch: branch || "main",
-          pat: pat || undefined,
           autoRestart,
           startCommand: startCommand || undefined,
           installCommand: installCommand || undefined,
@@ -229,31 +223,11 @@ export default function NewApp() {
                     <Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="my-awesome-bot" className="h-11 font-mono text-sm" />
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="space-y-2 md:col-span-2">
-                      <Label htmlFor="repo">GitHub Repository URL *</Label>
-                      <div className="relative">
-                        <Github className="absolute left-3 top-3 w-5 h-5 text-muted-foreground" />
-                        <Input id="repo" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} onBlur={() => { if (repoUrl) fetchRepoMeta(true); }} placeholder="https://github.com/username/repo" className="pl-10 h-11" />
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="branch">Branch</Label>
-                      <div className="relative">
-                        <GitBranch className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
-                        <Input id="branch" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" className="pl-9 h-11 font-mono text-sm" />
-                      </div>
-                    </div>
-                  </div>
-
                   <div className="space-y-2">
-                    <Label htmlFor="pat" className="flex items-center gap-2">
-                      Personal Access Token
-                      <span className="text-xs text-muted-foreground font-normal px-2 py-0.5 bg-white/5 rounded-full">Private repos only</span>
-                    </Label>
+                    <Label htmlFor="repo">GitHub Repository URL *</Label>
                     <div className="relative">
-                      <KeyRound className="absolute left-3 top-3 w-5 h-5 text-muted-foreground" />
-                      <Input id="pat" type="password" value={pat} onChange={(e) => setPat(e.target.value)} placeholder="ghp_xxxxxxxxxxxx" className="pl-10 h-11 font-mono text-sm" />
+                      <Github className="absolute left-3 top-3 w-5 h-5 text-muted-foreground" />
+                      <Input id="repo" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} onBlur={() => { if (repoUrl) fetchRepoMeta(true); }} placeholder="https://github.com/username/repo" className="pl-10 h-11" />
                     </div>
                   </div>
 
@@ -407,7 +381,6 @@ export default function NewApp() {
                 <div className="bg-black/30 border border-border rounded-xl p-4 text-left max-w-sm mx-auto mb-8 font-mono text-sm space-y-1">
                   {[
                     { label: "Repo", value: repoUrl.split("/").pop() ?? repoUrl },
-                    { label: "Branch", value: branch || "main" },
                     { label: "Env Vars", value: `${envVars.filter((e) => e.key.trim()).length} keys` },
                     ...(installCommand ? [{ label: "Install", value: installCommand }] : []),
                     ...(startCommand ? [{ label: "Start", value: startCommand }] : []),

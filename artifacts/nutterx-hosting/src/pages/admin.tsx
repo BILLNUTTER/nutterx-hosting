@@ -80,17 +80,17 @@ export default function Admin() {
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  // Check access via URL param
+  // Check access via URL param — run once on mount only
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("admin") !== "nutterxadmin=true") {
+    if (!window.location.href.includes("admin=nutterxadmin=true")) {
       setLocation("/");
       return;
     }
     const token = sessionStorage.getItem(ADMIN_TOKEN_KEY);
     if (token) setIsAuthenticated(true);
     setIsAuthChecked(true);
-  }, [setLocation]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
