@@ -1,13 +1,13 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
 const ALGORITHM = "aes-256-gcm";
 
 function getKey(): Buffer {
   const raw = process.env.ENCRYPTION_KEY;
-  if (!raw || raw.length < 64) {
-    throw new Error("ENCRYPTION_KEY must be a 64-char hex string (32 bytes)");
+  if (!raw) {
+    throw new Error("ENCRYPTION_KEY environment variable is not set");
   }
-  return Buffer.from(raw.slice(0, 64), "hex");
+  return createHash("sha256").update(raw).digest();
 }
 
 export function encrypt(plaintext: string): string {
