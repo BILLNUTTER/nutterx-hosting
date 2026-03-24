@@ -28,3 +28,7 @@ timeoutMs = 20000
 [userenv]
 
 [userenv.shared]
+
+[nix]
+channel = "stable-25_05"
+packages = ["python3", "gcc", "gnumake", "pkg-config", "xz", "bzip2", "autoconf", "automake", "libtool"]

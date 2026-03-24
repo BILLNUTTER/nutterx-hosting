@@ -179,16 +179,36 @@ export async function startApp(appId: string): Promise<void> {
       installCmd = installCmd.trim() + " --ignore-platform";
     }
 
+    // Locate python3 for node-gyp (native module compilation)
+    let pythonPath = "";
+    try {
+      const { execSync } = await import("child_process");
+      pythonPath = execSync("which python3 || which python", { encoding: "utf8" }).trim();
+    } catch {}
+
     const installEnv: Record<string, string> = {
       ...(process.env as Record<string, string>),
       npm_config_ignore_platform: "true",
       PNPM_IGNORE_PLATFORM: "true",
+      // Help node-gyp find Python for native module compilation
+      ...(pythonPath ? { npm_config_python: pythonPath, PYTHON: pythonPath } : {}),
     };
 
     const [installBin, ...installArgs] = installCmd.split(" ");
 
     await writeLog(appId, `Installing dependencies with: ${installCmd}`, "system");
-    await runCommand(installBin, installArgs, appDir, appId, installEnv);
+    try {
+      await runCommand(installBin, installArgs, appDir, appId, installEnv);
+    } catch (installErr) {
+      // Native module compilation can fail (e.g. no pre-built binary for this Node ABI).
+      // Retry with --ignore-scripts so the app can still be deployed without native addons.
+      const errMsg = installErr instanceof Error ? installErr.message : String(installErr);
+      await writeLog(appId, `Dependency install failed: ${errMsg}`, "stderr");
+      await writeLog(appId, `Retrying without native module compilation (--ignore-scripts)...`, "system");
+      const fallbackArgs = [...installArgs, "--ignore-scripts"];
+      await runCommand(installBin, fallbackArgs, appDir, appId, installEnv);
+      await writeLog(appId, `Dependencies installed without native modules. Some features may use JS fallbacks.`, "system");
+    }
 
     // ── Stage: start ──────────────────────────────────────────────────────
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
