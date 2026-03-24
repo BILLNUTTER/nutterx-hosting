@@ -42,7 +42,22 @@ function encryptEnvVars(envVars: Array<{ key: string; value: string }>) {
 }
 
 async function generateSlug(name: string): Promise<string> {
-  const base = slugify(name, { lower: true, strict: true, trim: true });
+  // slugify with strict:true removes anything that isn't a letter/number.
+  // If the name is empty, emoji-only, or pure unicode the result can be "".
+  // Fall back to "app" so we always get a valid base.
+  let base = slugify(name ?? "", { lower: true, strict: true, trim: true });
+  if (!base) {
+    // derive something readable from the raw name (ascii-only chars)
+    base = (name ?? "")
+      .replace(/[^a-zA-Z0-9\s-]/g, "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+  }
+  if (!base) base = "app";
+
   let candidate = base;
   let i = 0;
   while (await App.exists({ slug: candidate })) {

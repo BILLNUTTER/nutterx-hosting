@@ -124,12 +124,20 @@ export default function NewApp() {
   };
 
   const handleDeploy = async () => {
+    if (!name.trim() || !repoUrl.trim()) {
+      toast({
+        title: "Missing fields",
+        description: "App name and repository URL are required.",
+        variant: "destructive",
+      });
+      return;
+    }
     setIsDeploying(true);
     try {
       const app = await createApp({
         data: {
-          name,
-          repoUrl,
+          name: name.trim(),
+          repoUrl: repoUrl.trim(),
           branch: branch || "main",
           pat: pat || undefined,
           autoRestart,
