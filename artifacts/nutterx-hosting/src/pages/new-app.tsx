@@ -38,7 +38,6 @@ export default function NewApp() {
   const [repoUrl, setRepoUrl] = useState("");
   const [startCommand, setStartCommand] = useState("");
   const [installCommand, setInstallCommand] = useState("");
-  const [port, setPort] = useState("");
   const [autoRestart, setAutoRestart] = useState(true);
   const [envVars, setEnvVars] = useState<Array<{ key: string; value: string; comment?: string }>>([]);
 
@@ -96,7 +95,6 @@ export default function NewApp() {
         const meta = await resp.json();
         if (meta.startCommand && !startCommand) setStartCommand(meta.startCommand);
         if (meta.installCommand && !installCommand) setInstallCommand(meta.installCommand);
-        if (meta.port && !port) setPort(String(meta.port));
         if (!silent) {
           toast({
             title: "Settings detected",
@@ -154,7 +152,6 @@ export default function NewApp() {
           autoRestart,
           startCommand: startCommand || undefined,
           installCommand: installCommand || undefined,
-          port: port ? parseInt(port, 10) : undefined,
         } as any,
       });
 
@@ -262,10 +259,6 @@ export default function NewApp() {
                       <div className="space-y-2">
                         <Label htmlFor="startCmd">Start Command</Label>
                         <Input id="startCmd" value={startCommand} onChange={(e) => setStartCommand(e.target.value)} placeholder="npm start (auto-detected if blank)" className="font-mono text-sm" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="port">Port</Label>
-                        <Input id="port" type="number" value={port} onChange={(e) => setPort(e.target.value)} placeholder="3000" className="font-mono text-sm" />
                       </div>
                     </div>
                   </div>
