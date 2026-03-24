@@ -377,6 +377,28 @@ router.get("/admin/revenue", requireAdmin, async (req, res) => {
   }
 });
 
+// GET /api/admin/settings/test — verify credentials actually work with PesaPal
+router.get("/admin/settings/test", requireAdmin, async (req, res) => {
+  try {
+    await connectMongo();
+    const settings = await PesapalSettings.findOne({}).lean();
+    if (!settings?.consumerKey || !settings?.consumerSecret) {
+      res.json({ ok: false, message: "No credentials saved. Enter your Consumer Key and Secret first." });
+      return;
+    }
+    const { getPesapalToken } = await import("../services/pesapal.js");
+    const config = {
+      consumerKey: settings.consumerKey.trim(),
+      consumerSecret: settings.consumerSecret.trim(),
+      isProduction: settings.isProduction ?? false,
+    };
+    const token = await getPesapalToken(config);
+    res.json({ ok: !!token, message: token ? "Connection successful! PesaPal accepted your credentials." : "PesaPal returned no token." });
+  } catch (err: any) {
+    res.json({ ok: false, message: err.message ?? "Connection test failed" });
+  }
+});
+
 // GET /api/admin/settings
 router.get("/admin/settings", requireAdmin, async (req, res) => {
   try {
@@ -407,14 +429,16 @@ router.put("/admin/settings", requireAdmin, async (req, res) => {
       consumerSecret: string;
       isProduction: boolean;
     };
-    if (!consumerKey) {
+    const trimmedKey = (consumerKey ?? "").trim();
+    const trimmedSecret = (consumerSecret ?? "").trim();
+    if (!trimmedKey) {
       res.status(400).json({ error: "consumerKey is required" });
       return;
     }
 
-    const update: Record<string, any> = { consumerKey, isProduction: isProduction ?? false };
-    if (consumerSecret && consumerSecret !== "***configured***") {
-      update.consumerSecret = consumerSecret;
+    const update: Record<string, any> = { consumerKey: trimmedKey, isProduction: isProduction ?? false };
+    if (trimmedSecret && trimmedSecret !== "***configured***") {
+      update.consumerSecret = trimmedSecret;
     }
     update.ipnId = "";
 

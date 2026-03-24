@@ -23,7 +23,7 @@ import {
   Terminal, Loader2, Users, Server, KeyRound, LogOut, MoreVertical,
   CheckCircle2, XCircle, RefreshCw, Trash2, ShieldOff, ShieldCheck,
   ShieldAlert, ChevronDown, ChevronRight, Rocket, CreditCard, Settings2,
-  TrendingUp, Eye, EyeOff, Plus
+  TrendingUp, Eye, EyeOff, Plus, AlertTriangle, Zap
 } from "lucide-react";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -114,6 +114,8 @@ export default function Admin() {
   const [settingsProd, setSettingsProd] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   useEffect(() => {
     if (!window.location.href.includes("admin=nutterxadmin=true")) {
@@ -149,7 +151,7 @@ export default function Admin() {
         const cfg = await settRes.json() as PesapalConfig;
         setPesapalConfig(cfg);
         setSettingsKey(cfg.consumerKey);
-        setSettingsSecret(cfg.consumerSecret);
+        setSettingsSecret(""); // never pre-fill with masked placeholder
         setSettingsProd(cfg.isProduction);
       }
     } catch {
@@ -276,18 +278,35 @@ export default function Admin() {
   };
 
   const handleSaveSettings = async () => {
-    if (!settingsKey) { toast({ title: "Consumer Key is required", variant: "destructive" }); return; }
+    const trimmedKey = settingsKey.trim();
+    const trimmedSecret = settingsSecret.trim();
+    if (!trimmedKey) { toast({ title: "Consumer Key is required", variant: "destructive" }); return; }
     setIsSavingSettings(true);
+    setTestResult(null);
     try {
       const res = await adminFetch("/api/admin/settings", {
         method: "PUT",
-        body: JSON.stringify({ consumerKey: settingsKey, consumerSecret: settingsSecret, isProduction: settingsProd }),
+        body: JSON.stringify({ consumerKey: trimmedKey, consumerSecret: trimmedSecret, isProduction: settingsProd }),
       });
       if (!res.ok) throw new Error((await res.json()).error);
+      setSettingsKey(trimmedKey);
+      setSettingsSecret("");
       toast({ title: "Settings saved", description: "PesaPal credentials updated." });
     } catch (err: any) {
       toast({ title: "Failed", description: err.message, variant: "destructive" });
     } finally { setIsSavingSettings(false); }
+  };
+
+  const handleTestConnection = async () => {
+    setIsTesting(true);
+    setTestResult(null);
+    try {
+      const res = await adminFetch("/api/admin/settings/test");
+      const data = await res.json() as { ok: boolean; message: string };
+      setTestResult(data);
+    } catch (err: any) {
+      setTestResult({ ok: false, message: err.message ?? "Test failed" });
+    } finally { setIsTesting(false); }
   };
 
   if (!isAuthChecked) return null;
@@ -681,23 +700,48 @@ export default function Admin() {
                   </Label>
                 </div>
 
-                {pesapalConfig?.configured && (
-                  <div className="flex items-center gap-1.5 text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-2">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    PesaPal is configured and active
+                {testResult && (
+                  <div className={clsx(
+                    "flex items-start gap-2 text-xs rounded-lg px-3 py-2.5",
+                    testResult.ok
+                      ? "text-green-400 bg-green-500/10 border border-green-500/20"
+                      : "text-red-400 bg-red-500/10 border border-red-500/20"
+                  )}>
+                    {testResult.ok
+                      ? <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                      : <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />}
+                    <span className="leading-relaxed">{testResult.message}</span>
                   </div>
                 )}
 
-                <Button onClick={handleSaveSettings} disabled={isSavingSettings} className="w-full">
-                  {isSavingSettings ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                  Save Settings
-                </Button>
+                {!testResult && pesapalConfig?.configured && (
+                  <div className="flex items-center gap-1.5 text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-2">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    PesaPal credentials are saved
+                  </div>
+                )}
+
+                <div className="flex gap-3">
+                  <Button onClick={handleSaveSettings} disabled={isSavingSettings} className="flex-1">
+                    {isSavingSettings ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                    Save Settings
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleTestConnection}
+                    disabled={isTesting || !pesapalConfig?.configured}
+                    className="gap-2"
+                  >
+                    {isTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                    Test
+                  </Button>
+                </div>
 
                 <p className="text-xs text-muted-foreground">
                   Get your credentials from{" "}
                   <a href="https://developer.pesapal.com/" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">
                     developer.pesapal.com
-                  </a>. Use sandbox mode for testing.
+                  </a>. Use sandbox mode for testing. Click <strong>Test</strong> after saving to verify your credentials work.
                 </p>
               </div>
             </div>

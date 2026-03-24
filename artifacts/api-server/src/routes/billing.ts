@@ -29,8 +29,8 @@ async function getPesapalConfig() {
     throw new Error("PesaPal not configured. Please contact the administrator.");
   }
   return {
-    consumerKey: settings.consumerKey,
-    consumerSecret: settings.consumerSecret,
+    consumerKey: settings.consumerKey.trim(),
+    consumerSecret: settings.consumerSecret.trim(),
     isProduction: settings.isProduction ?? false,
     ipnId: settings.ipnId ?? "",
     settingsId: settings._id.toString(),
