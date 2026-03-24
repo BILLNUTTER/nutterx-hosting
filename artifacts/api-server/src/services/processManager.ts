@@ -5,6 +5,7 @@ import path from "path";
 import os from "os";
 import { connectMongo, App, Log, type AppStatus } from "@workspace/mongo";
 import mongoose from "mongoose";
+import { decrypt } from "../lib/crypto.js";
 
 const APPS_DIR = path.join(os.homedir(), ".nutterx-apps");
 
@@ -106,7 +107,11 @@ export async function startApp(appId: string): Promise<void> {
 
     const envVars: Record<string, string> = { ...process.env } as Record<string, string>;
     for (const envVar of app.envVars) {
-      envVars[envVar.key] = envVar.value;
+      try {
+        envVars[envVar.key] = decrypt(envVar.value);
+      } catch {
+        envVars[envVar.key] = envVar.value;
+      }
     }
     if (app.port) envVars["PORT"] = String(app.port);
 

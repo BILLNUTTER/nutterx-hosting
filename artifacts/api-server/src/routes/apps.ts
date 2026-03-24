@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import { connectMongo, App, Log, type IApp } from "@workspace/mongo";
 import { requireAuth } from "../middlewares/auth.js";
 import { startApp, stopApp, restartApp } from "../services/processManager.js";
+import { encrypt, decrypt } from "../lib/crypto.js";
 
 const router: IRouter = Router();
 
@@ -19,12 +20,24 @@ function toApiApp(doc: IApp | null) {
     startCommand: doc.startCommand ?? null,
     installCommand: doc.installCommand ?? null,
     port: doc.port ?? null,
-    envVars: doc.envVars.map((e) => ({ key: e.key, value: e.value })),
+    envVars: doc.envVars.map((e) => ({ key: e.key, value: safeDecrypt(e.value) })),
     lastDeployedAt: doc.lastDeployedAt?.toISOString() ?? null,
     errorMessage: doc.errorMessage ?? null,
     createdAt: (doc.createdAt as Date).toISOString(),
     updatedAt: (doc.updatedAt as Date).toISOString(),
   };
+}
+
+function safeDecrypt(value: string): string {
+  try {
+    return decrypt(value);
+  } catch {
+    return value;
+  }
+}
+
+function encryptEnvVars(envVars: Array<{ key: string; value: string }>) {
+  return envVars.map((e) => ({ key: e.key, value: encrypt(e.value) }));
 }
 
 async function generateSlug(name: string): Promise<string> {
@@ -249,7 +262,7 @@ router.put("/apps/:id/env", requireAuth, async (req: Request, res: Response) => 
 
     const app = await App.findOneAndUpdate(
       { _id: req.params.id, owner: req.user!.userId },
-      { envVars },
+      { envVars: encryptEnvVars(envVars) },
       { new: true }
     );
     if (!app) {
