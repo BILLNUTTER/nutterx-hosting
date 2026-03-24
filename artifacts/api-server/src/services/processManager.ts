@@ -1,6 +1,5 @@
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, execSync, type ChildProcess } from "child_process";
 import { existsSync, mkdirSync } from "fs";
-import { rm } from "fs/promises";
 import path from "path";
 import os from "os";
 import { EventEmitter } from "events";
@@ -43,11 +42,29 @@ const buildProcs = new Map<string, ChildProcess>();
 // Apps for which Stop was requested — checked at every build stage boundary
 const stopRequested = new Set<string>();
 
+// Path to globally-installed npm binaries (pm2, nodemon, etc.)
+const NPM_GLOBAL_BIN = (() => {
+  try {
+    return execSync("npm root -g", { encoding: "utf8" }).trim().replace(/node_modules$/, "bin");
+  } catch {
+    return "";
+  }
+})();
+
 function getAppDir(slug: string): string {
   if (!existsSync(APPS_DIR)) {
     mkdirSync(APPS_DIR, { recursive: true });
   }
   return path.join(APPS_DIR, slug);
+}
+
+/** Reliably delete a directory tree. Uses shell rm -rf to avoid Node fs.rm race conditions. */
+function removeDir(dir: string): void {
+  try {
+    execSync(`rm -rf ${JSON.stringify(dir)}`, { stdio: "ignore" });
+  } catch {
+    // ignore — directory may not exist
+  }
 }
 
 async function writeLog(appId: string, line: string, stream: "stdout" | "stderr" | "system") {
@@ -151,9 +168,7 @@ export async function startApp(appId: string): Promise<void> {
 
   const appDir = getAppDir(app.slug);
 
-  if (existsSync(appDir)) {
-    await rm(appDir, { recursive: true, force: true });
-  }
+  removeDir(appDir);
 
   try {
     // ── Stage: clone ───────────────────────────────────────────────────────
@@ -182,7 +197,6 @@ export async function startApp(appId: string): Promise<void> {
     // Locate python3 for node-gyp (native module compilation)
     let pythonPath = "";
     try {
-      const { execSync } = await import("child_process");
       pythonPath = execSync("which python3 || which python", { encoding: "utf8" }).trim();
     } catch {}
 
@@ -192,6 +206,8 @@ export async function startApp(appId: string): Promise<void> {
       PNPM_IGNORE_PLATFORM: "true",
       // Help node-gyp find Python for native module compilation
       ...(pythonPath ? { npm_config_python: pythonPath, PYTHON: pythonPath } : {}),
+      // Make globally-installed npm packages (pm2, nodemon, etc.) available
+      ...(NPM_GLOBAL_BIN ? { PATH: `${NPM_GLOBAL_BIN}:${process.env.PATH ?? ""}` } : {}),
     };
 
     const [installBin, ...installArgs] = installCmd.split(" ");
@@ -218,6 +234,10 @@ export async function startApp(appId: string): Promise<void> {
     // compete with the API server on the same port.  They may set their own
     // PORT via envVars below, or fall back to their own default (e.g. 3000).
     delete envVars["PORT"];
+    // Make globally-installed npm packages (pm2, nodemon, tsx, etc.) available
+    if (NPM_GLOBAL_BIN) {
+      envVars["PATH"] = `${NPM_GLOBAL_BIN}:${envVars["PATH"] ?? ""}`;
+    }
     for (const envVar of app.envVars) {
       try {
         envVars[envVar.key] = decrypt(envVar.value);
@@ -235,6 +255,23 @@ export async function startApp(appId: string): Promise<void> {
         startCmd = "node index.js";
       }
     }
+
+    // Intercept "pm2 start <script>" commands — pm2's --attach mode causes the
+    // actual app to survive SIGTERM (it daemonises), so our stop/restart won't
+    // work correctly.  Convert simple pm2 start commands to direct node execution.
+    const pm2SimpleMatch = startCmd.trim().match(
+      /^pm2\s+start\s+([\w./\\-]+(?:\.[cm]?js)?)\s*(.*)/i
+    );
+    if (pm2SimpleMatch) {
+      const script = pm2SimpleMatch[1];
+      // Only redirect scripts — ecosystem config files (*.config.js) stay as-is
+      if (!script.includes("config.js") && !script.includes("ecosystem")) {
+        const oldCmd = startCmd;
+        startCmd = `node ${script}`;
+        await writeLog(appId, `Converted "${oldCmd}" → "${startCmd}" for proper process control`, "system");
+      }
+    }
+
     const [startBin, ...startArgs] = startCmd.split(" ");
 
     await writeLog(appId, `Starting app with: ${startCmd}`, "system");
