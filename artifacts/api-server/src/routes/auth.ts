@@ -112,7 +112,17 @@ router.post("/auth/login", async (req, res) => {
     if (user.refreshTokens.length > 10) {
       user.refreshTokens = user.refreshTokens.slice(-10);
     }
-    await user.save();
+
+    // Silently upgrade hashes stored with more than 10 rounds (e.g. legacy 12-round
+    // hashes) so subsequent logins are faster. Fire-and-forget — never blocks the response.
+    if (bcrypt.getRounds(user.passwordHash) > 10) {
+      bcrypt.hash(password, 10).then((newHash) => {
+        user.passwordHash = newHash;
+        return user.save();
+      }).catch(() => {});
+    } else {
+      await user.save();
+    }
 
     res.json({
       accessToken,

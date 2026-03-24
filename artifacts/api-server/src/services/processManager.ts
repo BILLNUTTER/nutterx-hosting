@@ -27,6 +27,11 @@ export function subscribeToLogs(appId: string, cb: (ev: LogEvent) => void): () =
 // Allow overriding via env so persistent disks (Render, Railway, etc.) can be mounted
 const APPS_DIR = process.env.APPS_DIR ?? path.join(os.homedir(), ".nutterx-apps");
 
+// Shared package manager caches — survive across deploys within the same server
+// session, so packages only get downloaded once per process lifetime.
+const NPM_CACHE_DIR = path.join(os.tmpdir(), "nutterx-npm-cache");
+const PNPM_STORE_DIR = path.join(os.tmpdir(), "nutterx-pnpm-store");
+
 interface RunningProcess {
   process: ChildProcess;
   appId: string;
@@ -189,10 +194,21 @@ export async function startApp(appId: string): Promise<void> {
     const pm = detectPackageManager(appDir);
     let installCmd = app.installCommand || `${pm} install`;
 
-    if (/^\s*npm\s/.test(installCmd) && !/--ignore-platform/.test(installCmd)) {
-      installCmd = installCmd.trim() + " --ignore-platform";
-    } else if (/^\s*pnpm\s/.test(installCmd) && !/--ignore-platform/.test(installCmd)) {
-      installCmd = installCmd.trim() + " --ignore-platform";
+    // Inject speed flags based on which package manager is being used.
+    // These skip slow network round-trips (audit/fund) and reuse a shared
+    // cache so packages downloaded for one app benefit all subsequent apps.
+    if (/^\s*npm(\s|$)/.test(installCmd)) {
+      if (!/--ignore-platform/.test(installCmd)) installCmd += " --ignore-platform";
+      if (!/--no-audit/.test(installCmd))        installCmd += " --no-audit";
+      if (!/--no-fund/.test(installCmd))         installCmd += " --no-fund";
+      if (!/--prefer-offline/.test(installCmd))  installCmd += " --prefer-offline";
+      if (!/--cache/.test(installCmd))           installCmd += ` --cache ${NPM_CACHE_DIR}`;
+    } else if (/^\s*pnpm(\s|$)/.test(installCmd)) {
+      if (!/--ignore-platform/.test(installCmd))  installCmd += " --ignore-platform";
+      if (!/--store-dir/.test(installCmd))        installCmd += ` --store-dir ${PNPM_STORE_DIR}`;
+      if (!/--prefer-offline/.test(installCmd))   installCmd += " --prefer-offline";
+    } else if (/^\s*yarn(\s|$)/.test(installCmd)) {
+      if (!/--prefer-offline/.test(installCmd))   installCmd += " --prefer-offline";
     }
 
     // Locate python3 for node-gyp (native module compilation)
@@ -205,6 +221,10 @@ export async function startApp(appId: string): Promise<void> {
       ...(process.env as Record<string, string>),
       npm_config_ignore_platform: "true",
       PNPM_IGNORE_PLATFORM: "true",
+      // Disable npm audit/fund globally in env too (catches sub-processes)
+      npm_config_audit: "false",
+      npm_config_fund: "false",
+      npm_config_prefer_offline: "true",
       // Help node-gyp find Python for native module compilation
       ...(pythonPath ? { npm_config_python: pythonPath, PYTHON: pythonPath } : {}),
       // Make globally-installed npm packages (pm2, nodemon, etc.) available
