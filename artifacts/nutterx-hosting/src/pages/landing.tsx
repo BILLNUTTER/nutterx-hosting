@@ -1,6 +1,7 @@
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Terminal, Zap, Eye, Shield, Users, ArrowRight, CheckCircle, Globe, CreditCard } from "lucide-react";
+import { Zap, Eye, Shield, Users, ArrowRight, CheckCircle, Globe, CreditCard } from "lucide-react";
+import { NutterxLogo } from "@/components/NutterxLogo";
 import { motion } from "framer-motion";
 
 const features = [
@@ -52,9 +53,7 @@ export default function Landing() {
       <header className="sticky top-0 z-50 border-b border-white/5 bg-[#080808]/80 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-violet-500/20 border border-violet-500/30 flex items-center justify-center">
-              <Terminal className="w-4 h-4 text-violet-400" />
-            </div>
+            <NutterxLogo size={36} />
             <span className="font-bold text-lg tracking-tight">Nutterx</span>
             <span className="hidden sm:inline text-[10px] font-mono text-violet-400 uppercase tracking-widest bg-violet-500/10 border border-violet-500/20 px-2 py-0.5 rounded-full">
               Hosting
@@ -291,9 +290,7 @@ export default function Landing() {
       <footer className="border-t border-white/5 py-8 px-4">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-md bg-violet-500/20 border border-violet-500/30 flex items-center justify-center">
-              <Terminal className="w-3.5 h-3.5 text-violet-400" />
-            </div>
+            <NutterxLogo size={28} />
             <span className="text-sm font-semibold text-zinc-300">Nutterx Hosting</span>
           </div>
           <p className="text-xs text-zinc-600">© {new Date().getFullYear()} Nutterx. KSH 150/month · M-Pesa.</p>

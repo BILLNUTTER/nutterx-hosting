@@ -4,7 +4,8 @@ import { useLocation, Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Terminal, ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
+import { NutterxLogo } from "@/components/NutterxLogo";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 
@@ -60,9 +61,7 @@ export default function Login() {
 
         <div className="relative z-10 space-y-8 max-w-md">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-primary/10 border border-primary/25 flex items-center justify-center">
-              <Terminal className="w-6 h-6 text-primary" />
-            </div>
+            <NutterxLogo size={48} />
             <div>
               <span className="font-bold text-xl tracking-tight">Nutterx</span>
               <span className="ml-2 text-[9px] font-mono text-primary uppercase tracking-widest bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded-full">Hosting</span>
@@ -101,9 +100,7 @@ export default function Login() {
         <div className="w-full max-w-md mx-auto">
           {/* Mobile brand */}
           <div className="flex items-center gap-2.5 mb-10 lg:hidden">
-            <div className="w-9 h-9 rounded-lg bg-primary/10 border border-primary/25 flex items-center justify-center">
-              <Terminal className="w-4 h-4 text-primary" />
-            </div>
+            <NutterxLogo size={36} />
             <span className="font-bold text-lg">Nutterx Hosting</span>
           </div>
 

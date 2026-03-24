@@ -1,6 +1,7 @@
 import { Link, useLocation } from "wouter";
-import { Terminal, LogOut, ChevronDown, Plus, LayoutDashboard } from "lucide-react";
+import { LogOut, ChevronDown, Plus, LayoutDashboard } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
+import { NutterxLogo } from "@/components/NutterxLogo";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,9 +28,7 @@ export function Navbar() {
         {/* Brand */}
         <Link href="/dashboard">
           <div className="flex items-center gap-2 cursor-pointer flex-shrink-0">
-            <div className="w-7 h-7 rounded-md bg-primary/10 border border-primary/25 flex items-center justify-center">
-              <Terminal className="w-3.5 h-3.5 text-primary" />
-            </div>
+            <NutterxLogo size={28} />
             <span className="font-bold text-sm tracking-tight">Nutterx</span>
           </div>
         </Link>

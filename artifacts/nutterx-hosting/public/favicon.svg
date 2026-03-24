@@ -1,3 +1,15 @@
 <svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="180" height="180" rx="36" fill="#FF3C00"/>
+  <!-- Dark background so the gold reads on any browser tab colour -->
+  <circle cx="90" cy="90" r="88" fill="#111111"/>
+  <!-- Strong golden ring -->
+  <circle cx="90" cy="90" r="82" stroke="#D4AF37" stroke-width="10"/>
+  <!-- Bold golden N — three strokes: left bar, diagonal, right bar -->
+  <polyline
+    points="44,46 44,134 136,46 136,134"
+    stroke="#D4AF37"
+    stroke-width="19"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    fill="none"
+  />
 </svg>
