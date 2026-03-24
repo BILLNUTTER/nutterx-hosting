@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AppLayout } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -249,7 +249,7 @@ export default function NewApp() {
                       <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
                         <Terminal className="w-4 h-4" /> Build & Run Settings
                       </h3>
-                      <Button variant="outline" size="sm" onClick={fetchRepoMeta} disabled={!repoUrl || isFetchingMeta} className="gap-2 text-xs">
+                      <Button variant="outline" size="sm" onClick={() => fetchRepoMeta()} disabled={!repoUrl || isFetchingMeta} className="gap-2 text-xs">
                         {isFetchingMeta ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
                         Auto-detect from repo
                       </Button>

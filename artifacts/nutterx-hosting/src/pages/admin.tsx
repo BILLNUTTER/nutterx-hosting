@@ -246,7 +246,10 @@ export default function Admin() {
     setUserAppsLoading(userId);
     try {
       const res = await adminFetch(`/api/admin/users/${userId}/apps`);
-      if (res.ok) setUserApps((prev) => ({ ...prev, [userId]: await res.json() }));
+      if (res.ok) {
+        const data = await res.json();
+        setUserApps((prev) => ({ ...prev, [userId]: data }));
+      }
     } catch {} finally { setUserAppsLoading(null); }
   };
 
