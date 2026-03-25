@@ -133,20 +133,28 @@ function emitLines(appId: string, chunk: Buffer, stream: "stdout" | "stderr" | "
   for (const line of lines) writeLog(appId, line, stream);
 }
 
-async function runCommand(cmd: string, args: string[], cwd: string, appId: string, env?: Record<string, string>): Promise<void> {
+async function runCommand(cmd: string, args: string[], cwd: string, appId: string, env?: Record<string, string>, timeoutMs = 10 * 60 * 1000): Promise<void> {
   return new Promise((resolve, reject) => {
     if (stopRequested.has(appId)) { reject(new Error("Build cancelled by user")); return; }
     const proc = spawn(cmd, args, { cwd, env: env ?? process.env, shell: true });
     buildProcs.set(appId, proc);
     proc.stdout?.on("data", (d: Buffer) => emitLines(appId, d, "system"));
     proc.stderr?.on("data", (d: Buffer) => emitLines(appId, d, "stderr"));
+
+    const timer = setTimeout(() => {
+      proc.kill("SIGKILL");
+      buildProcs.delete(appId);
+      reject(new Error(`Command timed out after ${timeoutMs / 60000} minutes: ${cmd} ${args.join(" ")}`));
+    }, timeoutMs);
+
     proc.on("close", (code) => {
+      clearTimeout(timer);
       buildProcs.delete(appId);
       if (code === 0) resolve();
       else if (code === null && stopRequested.has(appId)) reject(new Error("Build cancelled by user"));
       else reject(new Error(`Process exited with code ${code}`));
     });
-    proc.on("error", (err) => { buildProcs.delete(appId); reject(err); });
+    proc.on("error", (err) => { clearTimeout(timer); buildProcs.delete(appId); reject(err); });
   });
 }
 
@@ -214,10 +222,11 @@ export async function startApp(appId: string): Promise<void> {
       if (!/--no-audit/.test(installCmd))        installCmd += " --no-audit";
       if (!/--no-fund/.test(installCmd))         installCmd += " --no-fund";
     } else if (/^\s*npm(\s|$)/.test(installCmd)) {
-      if (!/--ignore-platform/.test(installCmd)) installCmd += " --ignore-platform";
-      if (!/--no-audit/.test(installCmd))        installCmd += " --no-audit";
-      if (!/--no-fund/.test(installCmd))         installCmd += " --no-fund";
-      if (!/--prefer-offline/.test(installCmd))  installCmd += " --prefer-offline";
+      if (!/--ignore-platform/.test(installCmd))   installCmd += " --ignore-platform";
+      if (!/--no-audit/.test(installCmd))          installCmd += " --no-audit";
+      if (!/--no-fund/.test(installCmd))           installCmd += " --no-fund";
+      if (!/--prefer-offline/.test(installCmd))    installCmd += " --prefer-offline";
+      if (!/--legacy-peer-deps/.test(installCmd))  installCmd += " --legacy-peer-deps";
     } else if (/^\s*pnpm(\s|$)/.test(installCmd)) {
       if (!/--ignore-platform/.test(installCmd))  installCmd += " --ignore-platform";
       if (hasPnpmLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";

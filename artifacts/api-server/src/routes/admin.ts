@@ -311,8 +311,8 @@ router.get("/admin/env-template", requireAdmin, async (req, res) => {
       return result;
     }
 
-    // 1. Try .env.example and .env.sample
-    const envFiles = [".env.example", ".env.sample"];
+    // 1. Try .env.example, .env.sample, and set.env (common in WhatsApp bots)
+    const envFiles = [".env.example", ".env.sample", "set.env", ".env.template"];
     for (const b of branchesToTry) {
       for (const envFile of envFiles) {
         const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${envFile}`, { headers });
@@ -320,7 +320,28 @@ router.get("/admin/env-template", requireAdmin, async (req, res) => {
       }
     }
 
-    // 2. Fallback: scan source files for process.env.XXX — like Heroku config detection
+    // 2. Try app.json (Heroku manifest) — preferred over source scanning
+    for (const b of branchesToTry) {
+      const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/app.json`, { headers });
+      if (resp.ok) {
+        try {
+          const appJson = await resp.json() as Record<string, unknown>;
+          const envSection = appJson.env as Record<string, { description?: string; value?: string; required?: boolean }> | undefined;
+          if (envSection && typeof envSection === "object") {
+            const keys = Object.entries(envSection).map(([key, meta]) => ({
+              key,
+              defaultValue: meta?.value ?? "",
+              comment: meta?.description ?? null,
+              required: meta?.required !== false,
+            }));
+            res.json({ keys, source: "app.json" });
+            return;
+          }
+        } catch { /* not valid JSON, skip */ }
+      }
+    }
+
+    // 3. Fallback: scan source files for process.env.XXX — like Heroku config detection
     const sourceFiles = [
       "app.js", "app.ts", "index.js", "index.ts",
       "server.js", "server.ts", "bot.js", "bot.ts",
@@ -333,7 +354,6 @@ router.get("/admin/env-template", requireAdmin, async (req, res) => {
         const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${file}`, { headers });
         if (!resp.ok) continue;
         const text = await resp.text();
-        // Match process.env.VAR_NAME (not followed by ?)
         const matches = text.matchAll(/process\.env\.([A-Z][A-Z0-9_]{1,})/g);
         for (const m of matches) detectedKeys.add(m[1]);
         if (detectedKeys.size > 0) break;
@@ -349,7 +369,7 @@ router.get("/admin/env-template", requireAdmin, async (req, res) => {
       return;
     }
 
-    res.status(404).json({ error: "No .env.example found in repository" });
+    res.status(404).json({ error: "No .env.example or app.json found in repository" });
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
