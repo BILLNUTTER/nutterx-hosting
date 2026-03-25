@@ -119,6 +119,26 @@ export const pesapalSettings = pgTable("pesapal_settings", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+export const deployments = pgTable(
+  "deployments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    appId: text("app_id").notNull(),
+    status: text("status").notNull().default("building"), // building | success | failed | cancelled
+    branch: text("branch").notNull().default("main"),
+    commitHash: text("commit_hash"),
+    startedAt: timestamp("started_at").notNull().defaultNow(),
+    finishedAt: timestamp("finished_at"),
+    durationMs: integer("duration_ms"),
+    errorMessage: text("error_message"),
+    triggeredBy: text("triggered_by").notNull().default("user"), // user | auto-restart | recovery
+  },
+  (table) => [
+    index("deployments_app_id_idx").on(table.appId),
+    index("deployments_app_started_idx").on(table.appId, table.startedAt),
+  ]
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type App = typeof apps.$inferSelect;
@@ -131,3 +151,5 @@ export type NewPayment = typeof payments.$inferInsert;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type NewSubscription = typeof subscriptions.$inferInsert;
 export type PesapalSettings = typeof pesapalSettings.$inferSelect;
+export type Deployment = typeof deployments.$inferSelect;
+export type NewDeployment = typeof deployments.$inferInsert;

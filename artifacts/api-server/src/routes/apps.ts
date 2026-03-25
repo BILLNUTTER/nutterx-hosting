@@ -1,8 +1,8 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import slugify from "slugify";
 import { eq, and, desc } from "drizzle-orm";
-import { connectDb, db, apps, logs } from "@workspace/db";
-import type { App } from "@workspace/db";
+import { connectDb, db, apps, logs, deployments } from "@workspace/db";
+import type { App, Deployment } from "@workspace/db";
 import { requireAuth } from "../middlewares/auth.js";
 import { startApp, stopApp, restartApp, subscribeToLogs, getLogBuffer, deleteAppFiles } from "../services/processManager.js";
 import { encrypt, decrypt } from "../lib/crypto.js";
@@ -355,6 +355,19 @@ router.patch("/apps/:id", requireAuth, async (req: Request, res: Response) => {
   }
 });
 
+router.get("/apps/:id/deployments", requireAuth, async (req: Request, res: Response) => {
+  try {
+    await connectDb();
+    const [app] = await db.select({ id: apps.id }).from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId))).limit(1);
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+    const rows = await db.select().from(deployments).where(eq(deployments.appId, app.id)).orderBy(desc(deployments.startedAt)).limit(50);
+    res.json(rows);
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 router.delete("/apps/:id", requireAuth, async (req: Request, res: Response) => {
   try {
     await connectDb();
@@ -367,6 +380,7 @@ router.delete("/apps/:id", requireAuth, async (req: Request, res: Response) => {
     try { await stopApp(app.id); } catch {}
 
     await db.delete(logs).where(eq(logs.appId, app.id));
+    await db.delete(deployments).where(eq(deployments.appId, app.id));
     await db.delete(apps).where(eq(apps.id, app.id));
     deleteAppFiles(app.slug).catch(() => {}); // fire-and-forget disk cleanup
     res.json({ message: "App deleted successfully" });

@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import { eq, and, desc, gt, inArray, or, sql } from "drizzle-orm";
 import {
   connectDb, db,
-  users, apps, logs, passwordResetRequests, payments, subscriptions, pesapalSettings,
+  users, apps, logs, passwordResetRequests, payments, subscriptions, pesapalSettings, deployments,
 } from "@workspace/db";
 import type { App } from "@workspace/db";
 import slugify from "slugify";
@@ -164,6 +164,7 @@ router.delete("/admin/users/:id", requireAdmin, async (req, res) => {
     await Promise.all(userApps.map(async (a) => {
       try { await stopApp(a.id); } catch {}
       await db.delete(logs).where(eq(logs.appId, a.id));
+      await db.delete(deployments).where(eq(deployments.appId, a.id));
       await db.delete(apps).where(eq(apps.id, a.id));
       deleteAppFiles(a.slug).catch(() => {});
     }));
@@ -503,6 +504,7 @@ router.delete("/admin/my-apps/:id", requireAdmin, async (req, res) => {
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     await stopApp(app.id);
     await db.delete(logs).where(eq(logs.appId, app.id));
+    await db.delete(deployments).where(eq(deployments.appId, app.id));
     await db.delete(apps).where(eq(apps.id, app.id));
     deleteAppFiles(app.slug).catch(() => {});
     res.json({ message: "App deleted" });

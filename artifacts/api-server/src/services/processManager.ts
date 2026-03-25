@@ -4,7 +4,7 @@ import path from "path";
 import os from "os";
 import { EventEmitter } from "events";
 import { eq, or } from "drizzle-orm";
-import { connectDb, db, apps } from "@workspace/db";
+import { connectDb, db, apps, deployments } from "@workspace/db";
 import type { App } from "@workspace/db";
 import { decrypt } from "../lib/crypto.js";
 
@@ -86,6 +86,32 @@ function writeLog(appId: string, line: string, stream: "stdout" | "stderr" | "sy
   logBus.emit(appId, ev);
 }
 
+// Tracks the active deployment record so we can finalize it on success/failure
+const activeDeployments = new Map<string, { id: string; startedAt: number }>();
+
+async function createDeploymentRecord(appId: string, branch: string, triggeredBy: string): Promise<void> {
+  try {
+    const [rec] = await db.insert(deployments).values({ appId, branch, triggeredBy, status: "building" }).returning({ id: deployments.id });
+    if (rec) activeDeployments.set(appId, { id: rec.id, startedAt: Date.now() });
+  } catch { /* non-fatal — deployment history is best-effort */ }
+}
+
+async function finalizeDeploymentRecord(appId: string, status: "success" | "failed" | "cancelled", errorMessage?: string): Promise<void> {
+  const entry = activeDeployments.get(appId);
+  if (!entry) return;
+  activeDeployments.delete(appId);
+  try {
+    const finishedAt = new Date();
+    const durationMs = Date.now() - entry.startedAt;
+    await db.update(deployments).set({
+      status,
+      finishedAt,
+      durationMs,
+      errorMessage: errorMessage ?? null,
+    }).where(eq(deployments.id, entry.id));
+  } catch { /* non-fatal */ }
+}
+
 export type AppStatus = "idle" | "installing" | "running" | "stopped" | "crashed" | "error";
 
 async function setStatus(appId: string, status: AppStatus, errorMessage?: string) {
@@ -142,6 +168,9 @@ export async function startApp(appId: string): Promise<void> {
   await setStatus(appId, "installing");
   writeLog(appId, `Starting deployment for ${app.name}...`, "system");
 
+  const branch = app.branch || "main";
+  await createDeploymentRecord(appId, branch, "user");
+
   const appDir = getAppDir(app.slug);
   await removeDir(appDir);
 
@@ -151,9 +180,18 @@ export async function startApp(appId: string): Promise<void> {
     const cloneUrl = app.pat
       ? app.repoUrl.replace("https://", `https://${app.pat}@`)
       : app.repoUrl;
-    const branch = app.branch || "main";
     writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
     await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId);
+
+    // Capture commit hash before deleting git history
+    try {
+      const commitHash = execSync("git rev-parse HEAD", { cwd: appDir }).toString().trim();
+      const deployment = activeDeployments.get(appId);
+      if (deployment && commitHash) {
+        db.update(deployments).set({ commitHash }).where(eq(deployments.id, deployment.id)).catch(() => {});
+      }
+    } catch { /* non-fatal */ }
+
     // Remove git history — not needed at runtime, frees 10–50MB per app
     removeDir(path.join(appDir, ".git")).catch(() => {});
 
@@ -251,6 +289,7 @@ export async function startApp(appId: string): Promise<void> {
       await new Promise<void>((r) => setTimeout(r, 1500));
       await setStatus(appId, "running");
     }
+    await finalizeDeploymentRecord(appId, "success");
 
     const proc = spawn(startBin, startArgs, { cwd: appDir, env: envVars, shell: true });
     const entry: RunningProcess = { process: proc, appId, restartCount: 0, stopped: false };
@@ -300,9 +339,11 @@ export async function startApp(appId: string): Promise<void> {
     buildProcs.delete(appId);
     if (isCancelled) {
       writeLog(appId, "Deployment cancelled by user.", "system");
+      await finalizeDeploymentRecord(appId, "cancelled");
       await setStatus(appId, "stopped");
     } else {
       writeLog(appId, `Deployment failed: ${message}`, "system");
+      await finalizeDeploymentRecord(appId, "failed", message);
       await setStatus(appId, "error", message);
       throw err;
     }
