@@ -4,7 +4,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { connectDb, db, apps, logs } from "@workspace/db";
 import type { App } from "@workspace/db";
 import { requireAuth } from "../middlewares/auth.js";
-import { startApp, stopApp, restartApp, subscribeToLogs, getLogBuffer } from "../services/processManager.js";
+import { startApp, stopApp, restartApp, subscribeToLogs, getLogBuffer, deleteAppFiles } from "../services/processManager.js";
 import { encrypt, decrypt } from "../lib/crypto.js";
 
 const router: IRouter = Router();
@@ -368,6 +368,7 @@ router.delete("/apps/:id", requireAuth, async (req: Request, res: Response) => {
 
     await db.delete(logs).where(eq(logs.appId, app.id));
     await db.delete(apps).where(eq(apps.id, app.id));
+    deleteAppFiles(app.slug).catch(() => {}); // fire-and-forget disk cleanup
     res.json({ message: "App deleted successfully" });
   } catch (err) {
     req.log.error(err);

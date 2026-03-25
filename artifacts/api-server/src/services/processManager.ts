@@ -39,8 +39,6 @@ export function subscribeToLogs(appId: string, cb: (ev: LogEvent) => void): () =
 }
 
 const APPS_DIR = process.env.APPS_DIR ?? path.join(os.homedir(), ".nutterx-apps");
-const NPM_CACHE_DIR = path.join(os.tmpdir(), "nutterx-npm-cache");
-const PNPM_STORE_DIR = path.join(os.tmpdir(), "nutterx-pnpm-store");
 
 let _pythonPath: string | null = null;
 function getPythonPath(): Promise<string> {
@@ -156,6 +154,8 @@ export async function startApp(appId: string): Promise<void> {
     const branch = app.branch || "main";
     writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
     await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId);
+    // Remove git history — not needed at runtime, frees 10–50MB per app
+    removeDir(path.join(appDir, ".git")).catch(() => {});
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
@@ -175,16 +175,13 @@ export async function startApp(appId: string): Promise<void> {
       if (!/--ignore-scripts/.test(installCmd))  installCmd += " --ignore-scripts";
       if (!/--no-audit/.test(installCmd))        installCmd += " --no-audit";
       if (!/--no-fund/.test(installCmd))         installCmd += " --no-fund";
-      if (!/--cache/.test(installCmd))           installCmd += ` --cache ${NPM_CACHE_DIR}`;
     } else if (/^\s*npm(\s|$)/.test(installCmd)) {
       if (!/--ignore-platform/.test(installCmd)) installCmd += " --ignore-platform";
       if (!/--no-audit/.test(installCmd))        installCmd += " --no-audit";
       if (!/--no-fund/.test(installCmd))         installCmd += " --no-fund";
       if (!/--prefer-offline/.test(installCmd))  installCmd += " --prefer-offline";
-      if (!/--cache/.test(installCmd))           installCmd += ` --cache ${NPM_CACHE_DIR}`;
     } else if (/^\s*pnpm(\s|$)/.test(installCmd)) {
       if (!/--ignore-platform/.test(installCmd))  installCmd += " --ignore-platform";
-      if (!/--store-dir/.test(installCmd))        installCmd += ` --store-dir ${PNPM_STORE_DIR}`;
       if (hasPnpmLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
       if (!hasPnpmLock && !/--prefer-offline/.test(installCmd)) installCmd += " --prefer-offline";
     } else if (/^\s*yarn(\s|$)/.test(installCmd)) {
@@ -349,6 +346,11 @@ export async function restartApp(appId: string): Promise<void> {
 
 export function getProcessStatus(appId: string): boolean {
   return processes.has(appId);
+}
+
+export async function deleteAppFiles(slug: string): Promise<void> {
+  const appDir = getAppDir(slug);
+  await removeDir(appDir);
 }
 
 export async function recoverApps(): Promise<void> {

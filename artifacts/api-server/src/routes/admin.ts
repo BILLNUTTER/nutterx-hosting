@@ -8,7 +8,7 @@ import {
 } from "@workspace/db";
 import type { App } from "@workspace/db";
 import slugify from "slugify";
-import { startApp, stopApp, restartApp, subscribeToLogs, getLogBuffer } from "../services/processManager.js";
+import { startApp, stopApp, restartApp, subscribeToLogs, getLogBuffer, deleteAppFiles } from "../services/processManager.js";
 import { encrypt, decrypt } from "../lib/crypto.js";
 
 function safeDecrypt(value: string): string {
@@ -165,6 +165,7 @@ router.delete("/admin/users/:id", requireAdmin, async (req, res) => {
       try { await stopApp(a.id); } catch {}
       await db.delete(logs).where(eq(logs.appId, a.id));
       await db.delete(apps).where(eq(apps.id, a.id));
+      deleteAppFiles(a.slug).catch(() => {});
     }));
 
     await db.delete(payments).where(eq(payments.userId, user.id));
@@ -503,6 +504,7 @@ router.delete("/admin/my-apps/:id", requireAdmin, async (req, res) => {
     await stopApp(app.id);
     await db.delete(logs).where(eq(logs.appId, app.id));
     await db.delete(apps).where(eq(apps.id, app.id));
+    deleteAppFiles(app.slug).catch(() => {});
     res.json({ message: "App deleted" });
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
