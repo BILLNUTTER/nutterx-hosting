@@ -47,6 +47,7 @@ interface RunningProcess {
 const processes = new Map<string, RunningProcess>();
 const buildProcs = new Map<string, ChildProcess>();
 const stopRequested = new Set<string>();
+const installingApps = new Set<string>();
 
 const NPM_GLOBAL_BIN = (() => {
   try {
@@ -126,8 +127,10 @@ export async function startApp(appId: string): Promise<void> {
   if (!app) throw new Error("App not found");
 
   if (processes.has(appId)) throw new Error("App is already running");
+  if (installingApps.has(appId)) throw new Error("App is already installing");
 
   stopRequested.delete(appId);
+  installingApps.add(appId);
   await setStatus(appId, "installing");
   await writeLog(appId, `Starting deployment for ${app.name}...`, "system");
 
@@ -232,7 +235,15 @@ export async function startApp(appId: string): Promise<void> {
 
     const [startBin, ...startArgs] = startCmd.split(" ");
     await writeLog(appId, `Starting app with: ${startCmd}`, "system");
-    await setStatus(appId, "running");
+
+    // Mark running in DB before spawning. Retry once on transient DB failure.
+    installingApps.delete(appId);
+    try {
+      await setStatus(appId, "running");
+    } catch {
+      await new Promise<void>((r) => setTimeout(r, 1500));
+      await setStatus(appId, "running");
+    }
 
     const proc = spawn(startBin, startArgs, { cwd: appDir, env: envVars, shell: true });
     const entry: RunningProcess = { process: proc, appId, restartCount: 0, stopped: false };
@@ -278,6 +289,7 @@ export async function startApp(appId: string): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     const isCancelled = message === "Build cancelled by user";
     stopRequested.delete(appId);
+    installingApps.delete(appId);
     buildProcs.delete(appId);
     if (isCancelled) {
       await writeLog(appId, "Deployment cancelled by user.", "system");
@@ -292,6 +304,7 @@ export async function startApp(appId: string): Promise<void> {
 
 export async function stopApp(appId: string): Promise<void> {
   stopRequested.add(appId);
+  installingApps.delete(appId);
 
   const buildProc = buildProcs.get(appId);
   if (buildProc && !buildProc.killed) {
