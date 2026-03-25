@@ -148,7 +148,7 @@ export default function Admin() {
   // PesaPal settings
   const [settingsKey, setSettingsKey] = useState("");
   const [settingsSecret, setSettingsSecret] = useState("");
-  const [settingsProd, setSettingsProd] = useState(false);
+  const [settingsProd, setSettingsProd] = useState(true);
   const [showSecret, setShowSecret] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
@@ -1239,19 +1239,29 @@ export default function Admin() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3 py-2">
-                  <button
-                    onClick={() => setSettingsProd((v) => !v)}
-                    className={clsx(
-                      "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
-                      settingsProd ? "bg-green-500" : "bg-muted"
-                    )}
-                  >
-                    <span className={clsx("inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform", settingsProd ? "translate-x-4" : "translate-x-0.5")} />
-                  </button>
-                  <Label className="cursor-pointer" onClick={() => setSettingsProd((v) => !v)}>
-                    {settingsProd ? "Production environment" : "Sandbox environment (testing)"}
-                  </Label>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3 py-1">
+                    <button
+                      onClick={() => setSettingsProd((v) => !v)}
+                      className={clsx(
+                        "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
+                        settingsProd ? "bg-green-500" : "bg-red-500"
+                      )}
+                    >
+                      <span className={clsx("inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform", settingsProd ? "translate-x-4" : "translate-x-0.5")} />
+                    </button>
+                    <Label className="cursor-pointer font-medium" onClick={() => setSettingsProd((v) => !v)}>
+                      {settingsProd ? "✅ Production environment" : "⚠️ Sandbox environment (testing only)"}
+                    </Label>
+                  </div>
+                  {!settingsProd && (
+                    <div className="flex items-start gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2.5">
+                      <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                      <span className="leading-relaxed">
+                        <strong>Sandbox is active.</strong> Real M-Pesa payments will NOT work. Switch to Production and save to accept live payments.
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {testResult && (
