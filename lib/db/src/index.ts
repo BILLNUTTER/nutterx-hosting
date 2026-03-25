@@ -1,22 +1,30 @@
-import { drizzle } from "drizzle-orm/node-postgres";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "./schema/index.js";
 
 const { Pool } = pg;
 
-const connectionString = process.env.PG_DATABASE_URL || process.env.DATABASE_URL;
+const primaryUrl = process.env.PG_DATABASE_URL;
+const fallbackUrl = process.env.DATABASE_URL;
 
-if (!connectionString) {
+if (!primaryUrl && !fallbackUrl) {
   throw new Error("PG_DATABASE_URL or DATABASE_URL must be set");
 }
 
-export const pool = new Pool({
-  connectionString,
-  ssl: { rejectUnauthorized: false },
-  max: 10,
-});
+let _pool: pg.Pool | null = null;
+let _db: NodePgDatabase<typeof schema> | null = null;
 
-export const db = drizzle(pool, { schema });
+export function getPool(): pg.Pool {
+  if (!_pool) throw new Error("connectDb() has not been called yet");
+  return _pool;
+}
+
+export function getDb(): NodePgDatabase<typeof schema> {
+  if (!_db) throw new Error("connectDb() has not been called yet");
+  return _db;
+}
+
+export { schema };
 
 export * from "./schema/index.js";
 
@@ -121,10 +129,68 @@ CREATE TABLE IF NOT EXISTS pesapal_settings (
 );
 `;
 
+async function tryConnect(url: string): Promise<pg.Pool | null> {
+  const testPool = new Pool({
+    connectionString: url,
+    ssl: { rejectUnauthorized: false },
+    max: 1,
+    connectionTimeoutMillis: 5000,
+  });
+  try {
+    const client = await testPool.connect();
+    client.release();
+    return new Pool({
+      connectionString: url,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+    });
+  } catch {
+    await testPool.end().catch(() => {});
+    return null;
+  }
+}
+
 let migrated = false;
 
 export async function connectDb(): Promise<void> {
   if (migrated) return;
-  await pool.query(MIGRATION_SQL);
+
+  if (primaryUrl) {
+    const pool = await tryConnect(primaryUrl);
+    if (pool) {
+      _pool = pool;
+      _db = drizzle(pool, { schema });
+      console.log("[db] Connected to Supabase PostgreSQL");
+    } else {
+      console.warn("[db] Supabase unreachable from this environment, trying fallback...");
+    }
+  }
+
+  if (!_pool && fallbackUrl) {
+    const pool = await tryConnect(fallbackUrl);
+    if (pool) {
+      _pool = pool;
+      _db = drizzle(pool, { schema });
+      console.log("[db] Connected to fallback PostgreSQL");
+    }
+  }
+
+  if (!_pool || !_db) {
+    throw new Error("Could not connect to any PostgreSQL database");
+  }
+
+  await _pool.query(MIGRATION_SQL);
   migrated = true;
 }
+
+export const db = new Proxy({} as NodePgDatabase<typeof schema>, {
+  get(_target, prop) {
+    return getDb()[prop as keyof NodePgDatabase<typeof schema>];
+  },
+});
+
+export const pool = new Proxy({} as pg.Pool, {
+  get(_target, prop) {
+    return getPool()[prop as keyof pg.Pool];
+  },
+});
