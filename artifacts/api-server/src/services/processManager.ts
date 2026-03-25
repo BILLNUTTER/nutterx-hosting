@@ -3,10 +3,26 @@ import { existsSync, mkdirSync, rm } from "fs";
 import path from "path";
 import os from "os";
 import { EventEmitter } from "events";
-import { eq, or, sql } from "drizzle-orm";
-import { connectDb, db, apps, logs } from "@workspace/db";
+import { eq, or } from "drizzle-orm";
+import { connectDb, db, apps } from "@workspace/db";
 import type { App } from "@workspace/db";
 import { decrypt } from "../lib/crypto.js";
+
+// In-memory log ring buffer — no DB writes for logs.
+// Capped at LOG_BUFFER_SIZE lines per app so memory stays bounded.
+const LOG_BUFFER_SIZE = 500;
+const logBuffers = new Map<string, LogEvent[]>();
+
+export function getLogBuffer(appId: string): LogEvent[] {
+  return logBuffers.get(appId) ?? [];
+}
+
+function bufferLog(appId: string, ev: LogEvent) {
+  let buf = logBuffers.get(appId);
+  if (!buf) { buf = []; logBuffers.set(appId, buf); }
+  buf.push(ev);
+  if (buf.length > LOG_BUFFER_SIZE) buf.splice(0, buf.length - LOG_BUFFER_SIZE);
+}
 
 export interface LogEvent {
   line: string;
@@ -66,17 +82,10 @@ function removeDir(dir: string): Promise<void> {
   return new Promise((resolve) => { rm(dir, { recursive: true, force: true }, () => resolve()); });
 }
 
-async function writeLog(appId: string, line: string, stream: "stdout" | "stderr" | "system") {
-  const timestamp = new Date();
-  logBus.emit(appId, { line, stream, timestamp } satisfies LogEvent);
-  try {
-    await connectDb();
-    await db.insert(logs).values({ appId, line, stream, timestamp });
-    // Trim old logs: keep at most 500 per app (fire-and-forget)
-    db.execute(
-      sql`DELETE FROM logs WHERE app_id = ${appId} AND id NOT IN (SELECT id FROM logs WHERE app_id = ${appId} ORDER BY timestamp DESC LIMIT 500)`
-    ).catch(() => {});
-  } catch {}
+function writeLog(appId: string, line: string, stream: "stdout" | "stderr" | "system") {
+  const ev: LogEvent = { line, stream, timestamp: new Date() };
+  bufferLog(appId, ev);
+  logBus.emit(appId, ev);
 }
 
 export type AppStatus = "idle" | "installing" | "running" | "stopped" | "crashed" | "error";
@@ -97,7 +106,7 @@ function detectPackageManager(appDir: string): string {
 
 function emitLines(appId: string, chunk: Buffer, stream: "stdout" | "stderr" | "system") {
   const lines = chunk.toString().split(/\r?\n|\r/).filter((l) => l.trim());
-  for (const line of lines) writeLog(appId, line, stream).catch(() => {});
+  for (const line of lines) writeLog(appId, line, stream);
 }
 
 async function runCommand(cmd: string, args: string[], cwd: string, appId: string, env?: Record<string, string>): Promise<void> {
@@ -131,8 +140,9 @@ export async function startApp(appId: string): Promise<void> {
 
   stopRequested.delete(appId);
   installingApps.add(appId);
+  logBuffers.delete(appId); // fresh buffer for new deploy
   await setStatus(appId, "installing");
-  await writeLog(appId, `Starting deployment for ${app.name}...`, "system");
+  writeLog(appId, `Starting deployment for ${app.name}...`, "system");
 
   const appDir = getAppDir(app.slug);
   await removeDir(appDir);
@@ -144,7 +154,7 @@ export async function startApp(appId: string): Promise<void> {
       ? app.repoUrl.replace("https://", `https://${app.pat}@`)
       : app.repoUrl;
     const branch = app.branch || "main";
-    await writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
+    writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
     await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId);
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
@@ -195,16 +205,16 @@ export async function startApp(appId: string): Promise<void> {
     };
 
     const [installBin, ...installArgs] = installCmd.split(" ");
-    await writeLog(appId, `Installing dependencies with: ${installCmd}`, "system");
+    writeLog(appId, `Installing dependencies with: ${installCmd}`, "system");
     try {
       await runCommand(installBin, installArgs, appDir, appId, installEnv);
     } catch (installErr) {
       const errMsg = installErr instanceof Error ? installErr.message : String(installErr);
-      await writeLog(appId, `Dependency install failed: ${errMsg}`, "stderr");
-      await writeLog(appId, `Retrying without native module compilation (--ignore-scripts)...`, "system");
+      writeLog(appId, `Dependency install failed: ${errMsg}`, "stderr");
+      writeLog(appId, `Retrying without native module compilation (--ignore-scripts)...`, "system");
       const fallbackArgs = [...installArgs, "--ignore-scripts"];
       await runCommand(installBin, fallbackArgs, appDir, appId, installEnv);
-      await writeLog(appId, `Dependencies installed without native modules. Some features may use JS fallbacks.`, "system");
+      writeLog(appId, `Dependencies installed without native modules. Some features may use JS fallbacks.`, "system");
     }
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
@@ -229,12 +239,12 @@ export async function startApp(appId: string): Promise<void> {
       if (!script.includes("config.js") && !script.includes("ecosystem")) {
         const oldCmd = startCmd;
         startCmd = `node ${script}`;
-        await writeLog(appId, `Converted "${oldCmd}" → "${startCmd}" for proper process control`, "system");
+        writeLog(appId, `Converted "${oldCmd}" → "${startCmd}" for proper process control`, "system");
       }
     }
 
     const [startBin, ...startArgs] = startCmd.split(" ");
-    await writeLog(appId, `Starting app with: ${startCmd}`, "system");
+    writeLog(appId, `Starting app with: ${startCmd}`, "system");
 
     // Mark running in DB before spawning. Retry once on transient DB failure.
     installingApps.delete(appId);
@@ -249,28 +259,28 @@ export async function startApp(appId: string): Promise<void> {
     const entry: RunningProcess = { process: proc, appId, restartCount: 0, stopped: false };
     processes.set(appId, entry);
 
-    proc.stdout?.on("data", (d: Buffer) => { writeLog(appId, d.toString().trimEnd(), "stdout").catch(() => {}); });
-    proc.stderr?.on("data", (d: Buffer) => { writeLog(appId, d.toString().trimEnd(), "stderr").catch(() => {}); });
+    proc.stdout?.on("data", (d: Buffer) => emitLines(appId, d, "stdout"));
+    proc.stderr?.on("data", (d: Buffer) => emitLines(appId, d, "stderr"));
 
     proc.on("close", async (code) => {
       const current = processes.get(appId);
       if (!current || current.stopped) {
-        await setStatus(appId, "stopped");
-        await writeLog(appId, `App stopped (exit code: ${code})`, "system");
+        writeLog(appId, `App stopped (exit code: ${code})`, "system");
         processes.delete(appId);
+        await setStatus(appId, "stopped");
         return;
       }
 
-      await writeLog(appId, `App crashed (exit code: ${code})`, "system");
+      writeLog(appId, `App crashed (exit code: ${code})`, "system");
 
       const [freshApp] = await db.select({ autoRestart: apps.autoRestart }).from(apps).where(eq(apps.id, appId)).limit(1);
       if (freshApp?.autoRestart && current.restartCount < 5) {
         current.restartCount++;
-        await writeLog(appId, `Auto-restarting (attempt ${current.restartCount}/5)...`, "system");
+        writeLog(appId, `Auto-restarting (attempt ${current.restartCount}/5)...`, "system");
         processes.delete(appId);
         setTimeout(() => {
           startApp(appId).catch(async (e) => {
-            await writeLog(appId, `Auto-restart failed: ${e.message}`, "system");
+            writeLog(appId, `Auto-restart failed: ${e.message}`, "system");
             await setStatus(appId, "crashed");
           });
         }, 2000 * current.restartCount);
@@ -281,7 +291,7 @@ export async function startApp(appId: string): Promise<void> {
     });
 
     proc.on("error", async (err) => {
-      await writeLog(appId, `Process error: ${err.message}`, "system");
+      writeLog(appId, `Process error: ${err.message}`, "system");
       await setStatus(appId, "error", err.message);
       processes.delete(appId);
     });
@@ -292,10 +302,10 @@ export async function startApp(appId: string): Promise<void> {
     installingApps.delete(appId);
     buildProcs.delete(appId);
     if (isCancelled) {
-      await writeLog(appId, "Deployment cancelled by user.", "system");
+      writeLog(appId, "Deployment cancelled by user.", "system");
       await setStatus(appId, "stopped");
     } else {
-      await writeLog(appId, `Deployment failed: ${message}`, "system");
+      writeLog(appId, `Deployment failed: ${message}`, "system");
       await setStatus(appId, "error", message);
       throw err;
     }
@@ -326,7 +336,7 @@ export async function stopApp(appId: string): Promise<void> {
   });
   processes.delete(appId);
   await setStatus(appId, "stopped");
-  await writeLog(appId, "App stopped by user", "system");
+  writeLog(appId, "App stopped by user", "system");
 }
 
 export async function restartApp(appId: string): Promise<void> {

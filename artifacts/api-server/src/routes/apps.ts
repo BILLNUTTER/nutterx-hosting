@@ -1,10 +1,10 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import slugify from "slugify";
-import { eq, and, desc, asc, gt } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { connectDb, db, apps, logs } from "@workspace/db";
 import type { App } from "@workspace/db";
 import { requireAuth } from "../middlewares/auth.js";
-import { startApp, stopApp, restartApp, subscribeToLogs } from "../services/processManager.js";
+import { startApp, stopApp, restartApp, subscribeToLogs, getLogBuffer } from "../services/processManager.js";
 import { encrypt, decrypt } from "../lib/crypto.js";
 
 const router: IRouter = Router();
@@ -445,18 +445,16 @@ router.get("/apps/:id/logs", requireAuth, async (req: Request, res: Response) =>
     const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
 
+    const buf = getLogBuffer(app.id);
     const limit = parseInt((req.query.limit as string) ?? "100", 10);
-    const logRows = await db.select().from(logs).where(eq(logs.appId, app.id)).orderBy(desc(logs.timestamp)).limit(limit);
-
-    const result = logRows.reverse().map((l) => ({
-      id: l.id,
+    const slice = buf.slice(-limit);
+    res.json(slice.map((l, i) => ({
+      id: i,
       appId: app.id,
       line: l.line,
       stream: l.stream,
       timestamp: l.timestamp.toISOString(),
-    }));
-
-    res.json(result);
+    })));
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
@@ -481,12 +479,9 @@ router.get("/apps/:id/logs/stream", requireAuth, async (req: Request, res: Respo
     const sinceRaw = req.query.since as string | undefined;
     if (sinceRaw) {
       const since = new Date(sinceRaw);
-      const gapLogs = await db.select().from(logs)
-        .where(and(eq(logs.appId, app.id), gt(logs.timestamp, since)))
-        .orderBy(asc(logs.timestamp))
-        .limit(200);
-      for (const log of gapLogs) {
-        send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
+      const buf = getLogBuffer(app.id);
+      for (const log of buf) {
+        if (log.timestamp > since) send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
       }
     }
 

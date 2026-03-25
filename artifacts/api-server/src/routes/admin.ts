@@ -8,7 +8,7 @@ import {
 } from "@workspace/db";
 import type { App } from "@workspace/db";
 import slugify from "slugify";
-import { startApp, stopApp, restartApp, subscribeToLogs } from "../services/processManager.js";
+import { startApp, stopApp, restartApp, subscribeToLogs, getLogBuffer } from "../services/processManager.js";
 import { encrypt, decrypt } from "../lib/crypto.js";
 
 function safeDecrypt(value: string): string {
@@ -559,17 +559,14 @@ router.get("/admin/my-apps/:id/logs/stream", async (req, res) => {
     const send = (data: unknown) => { res.write(`data: ${JSON.stringify(data)}\n\n`); flush(); };
 
     const sinceRaw = req.query.since as string | undefined;
+    const buf = getLogBuffer(app.id);
     if (sinceRaw) {
       const since = new Date(sinceRaw);
-      const gapLogs = await db.select().from(logs)
-        .where(and(eq(logs.appId, app.id), gt(logs.timestamp, since)))
-        .orderBy(desc(logs.timestamp)).limit(200);
-      for (const log of gapLogs) send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
+      for (const log of buf) {
+        if (log.timestamp > since) send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
+      }
     } else {
-      const history = await db.select().from(logs)
-        .where(eq(logs.appId, app.id))
-        .orderBy(desc(logs.timestamp)).limit(100);
-      for (const log of history.reverse()) send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
+      for (const log of buf) send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
     }
 
     const unsubscribe = subscribeToLogs(app.id, (ev) => send({ line: ev.line, stream: ev.stream, timestamp: ev.timestamp.toISOString() }));
