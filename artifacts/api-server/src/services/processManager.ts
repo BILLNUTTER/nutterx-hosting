@@ -142,14 +142,28 @@ export async function startApp(appId: string): Promise<void> {
       : app.repoUrl;
     const branch = app.branch || "main";
     await writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
-    await runCommand("git", ["clone", "--progress", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId);
+    await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId);
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
     const pm = detectPackageManager(appDir);
-    let installCmd = app.installCommand || `${pm} install`;
+    const hasPackageLock = existsSync(path.join(appDir, "package-lock.json"));
+    const hasPnpmLock    = existsSync(path.join(appDir, "pnpm-lock.yaml"));
+    const hasYarnLock    = existsSync(path.join(appDir, "yarn.lock"));
 
-    if (/^\s*npm(\s|$)/.test(installCmd)) {
+    // Default: use ci/frozen-lockfile variant when lockfile is present (much faster)
+    let installCmd = app.installCommand || (
+      pm === "pnpm" ? "pnpm install" :
+      pm === "yarn" ? "yarn install"  :
+      hasPackageLock ? "npm ci" : "npm install"
+    );
+
+    if (/^\s*npm\s+ci(\s|$)/.test(installCmd)) {
+      if (!/--ignore-scripts/.test(installCmd))  installCmd += " --ignore-scripts";
+      if (!/--no-audit/.test(installCmd))        installCmd += " --no-audit";
+      if (!/--no-fund/.test(installCmd))         installCmd += " --no-fund";
+      if (!/--cache/.test(installCmd))           installCmd += ` --cache ${NPM_CACHE_DIR}`;
+    } else if (/^\s*npm(\s|$)/.test(installCmd)) {
       if (!/--ignore-platform/.test(installCmd)) installCmd += " --ignore-platform";
       if (!/--no-audit/.test(installCmd))        installCmd += " --no-audit";
       if (!/--no-fund/.test(installCmd))         installCmd += " --no-fund";
@@ -158,9 +172,11 @@ export async function startApp(appId: string): Promise<void> {
     } else if (/^\s*pnpm(\s|$)/.test(installCmd)) {
       if (!/--ignore-platform/.test(installCmd))  installCmd += " --ignore-platform";
       if (!/--store-dir/.test(installCmd))        installCmd += ` --store-dir ${PNPM_STORE_DIR}`;
-      if (!/--prefer-offline/.test(installCmd))   installCmd += " --prefer-offline";
+      if (hasPnpmLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
+      if (!hasPnpmLock && !/--prefer-offline/.test(installCmd)) installCmd += " --prefer-offline";
     } else if (/^\s*yarn(\s|$)/.test(installCmd)) {
-      if (!/--prefer-offline/.test(installCmd))   installCmd += " --prefer-offline";
+      if (hasYarnLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
+      if (!hasYarnLock && !/--prefer-offline/.test(installCmd)) installCmd += " --prefer-offline";
     }
 
     const pythonPath = await getPythonPath();

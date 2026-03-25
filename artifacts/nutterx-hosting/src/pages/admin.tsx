@@ -1322,14 +1322,20 @@ export default function Admin() {
               ) : (
                 <>
                   {wEnvFetchStatus === "found" && (
-                    <div className="flex items-center gap-2 text-xs text-green-500 bg-green-500/10 rounded-md px-3 py-1.5">
-                      <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
-                      Found {wEnvVars.length} variable{wEnvVars.length !== 1 ? "s" : ""} from <code className="ml-1">{wEnvFetchSource}</code>
+                    <div className="flex items-start gap-2 text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded-md px-3 py-2">
+                      <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                      <span>
+                        Found <strong>{wEnvVars.length}</strong> variable{wEnvVars.length !== 1 ? "s" : ""} from{" "}
+                        <code className="font-mono">{wEnvFetchSource}</code>
+                        {wEnvFetchSource === "source scan" && " — detected from source code, fill in your values."}
+                        {wEnvFetchSource !== "source scan" && " — fill in your values."}
+                      </span>
                     </div>
                   )}
                   {wEnvFetchStatus === "not_found" && (
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-md px-3 py-1.5">
-                      <Info className="w-3.5 h-3.5 flex-shrink-0" /> No .env.example found — add variables manually below.
+                    <div className="flex items-start gap-2 text-xs text-blue-300 bg-blue-500/10 border border-blue-500/20 rounded-md px-3 py-2">
+                      <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                      No <code className="font-mono">.env.example</code> found in this repo. Add any required variables manually below.
                     </div>
                   )}
                   <div className="max-h-52 overflow-y-auto space-y-2 pr-1">

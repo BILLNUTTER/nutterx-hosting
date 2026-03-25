@@ -124,10 +124,15 @@
 }
 
 @layer base {
+  html {
+    height: 100%;
+    scrollbar-gutter: stable;
+  }
   * {
     @apply border-border;
   }
   body {
+    height: 100%;
     @apply font-sans antialiased bg-background text-foreground selection:bg-primary/30 selection:text-primary-foreground;
   }
   /* Modern custom scrollbar */

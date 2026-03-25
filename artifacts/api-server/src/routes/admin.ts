@@ -301,10 +301,44 @@ router.get("/admin/env-template", requireAdmin, async (req, res) => {
       return result;
     }
 
+    // 1. Try .env.example and .env.sample
+    const envFiles = [".env.example", ".env.sample"];
     for (const b of branchesToTry) {
-      const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/.env.example`, { headers });
-      if (resp.ok) { res.json({ keys: parseEnvExample(await resp.text()), source: ".env.example" }); return; }
+      for (const envFile of envFiles) {
+        const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${envFile}`, { headers });
+        if (resp.ok) { res.json({ keys: parseEnvExample(await resp.text()), source: envFile }); return; }
+      }
     }
+
+    // 2. Fallback: scan source files for process.env.XXX — like Heroku config detection
+    const sourceFiles = [
+      "app.js", "app.ts", "index.js", "index.ts",
+      "server.js", "server.ts", "bot.js", "bot.ts",
+      "main.js", "main.ts", "src/app.js", "src/app.ts",
+      "src/index.js", "src/index.ts", "src/server.js", "src/server.ts",
+    ];
+    const detectedKeys = new Set<string>();
+    for (const b of branchesToTry) {
+      for (const file of sourceFiles) {
+        const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${file}`, { headers });
+        if (!resp.ok) continue;
+        const text = await resp.text();
+        // Match process.env.VAR_NAME (not followed by ?)
+        const matches = text.matchAll(/process\.env\.([A-Z][A-Z0-9_]{1,})/g);
+        for (const m of matches) detectedKeys.add(m[1]);
+        if (detectedKeys.size > 0) break;
+      }
+      if (detectedKeys.size > 0) break;
+    }
+
+    if (detectedKeys.size > 0) {
+      const keys = Array.from(detectedKeys)
+        .sort()
+        .map((key) => ({ key, defaultValue: "", comment: "Detected from source code", required: true }));
+      res.json({ keys, source: "source scan" });
+      return;
+    }
+
     res.status(404).json({ error: "No .env.example found in repository" });
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });

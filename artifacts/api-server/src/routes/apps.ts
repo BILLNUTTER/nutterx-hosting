@@ -97,25 +97,20 @@ router.get("/apps/env-template", requireAuth, async (req: Request, res: Response
       ? [branch, "main", "master"].filter((v, i, a) => a.indexOf(v) === i)
       : ["main", "master"];
 
-    let text: string | null = null;
+    // 1. Try .env.example and .env.sample
     for (const b of branchesToTry) {
-      const url = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/.env.example`;
-      const resp = await fetch(url, { headers });
-      if (resp.ok) {
-        text = await resp.text();
-        break;
+      for (const envFile of [".env.example", ".env.sample"]) {
+        const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${envFile}`, { headers });
+        if (resp.ok) {
+          res.json({ keys: parseEnvExample(await resp.text()), source: envFile });
+          return;
+        }
       }
     }
 
-    if (text !== null) {
-      const keys = parseEnvExample(text);
-      res.json({ keys, source: ".env.example" });
-      return;
-    }
-
+    // 2. Try app.json (Heroku manifest)
     for (const b of branchesToTry) {
-      const url = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/app.json`;
-      const resp = await fetch(url, { headers });
+      const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/app.json`, { headers });
       if (resp.ok) {
         try {
           const appJson = await resp.json() as Record<string, unknown>;
@@ -130,11 +125,36 @@ router.get("/apps/env-template", requireAuth, async (req: Request, res: Response
             res.json({ keys, source: "app.json" });
             return;
           }
-        } catch {
-          // not valid JSON, skip
-        }
-        break;
+        } catch { /* not valid JSON, skip */ }
       }
+    }
+
+    // 3. Fallback: scan source files for process.env.VAR_NAME patterns
+    const sourceFiles = [
+      "app.js", "app.ts", "index.js", "index.ts",
+      "server.js", "server.ts", "bot.js", "bot.ts",
+      "main.js", "main.ts", "src/app.js", "src/app.ts",
+      "src/index.js", "src/index.ts", "src/server.js", "src/server.ts",
+    ];
+    const detectedKeys = new Set<string>();
+    for (const b of branchesToTry) {
+      for (const file of sourceFiles) {
+        const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${file}`, { headers });
+        if (!resp.ok) continue;
+        const text = await resp.text();
+        const matches = text.matchAll(/process\.env\.([A-Z][A-Z0-9_]{1,})/g);
+        for (const m of matches) detectedKeys.add(m[1]);
+        if (detectedKeys.size > 0) break;
+      }
+      if (detectedKeys.size > 0) break;
+    }
+
+    if (detectedKeys.size > 0) {
+      const keys = Array.from(detectedKeys).sort().map((key) => ({
+        key, defaultValue: "", comment: "Detected from source code", required: true,
+      }));
+      res.json({ keys, source: "source scan" });
+      return;
     }
 
     res.status(404).json({ error: "No .env.example or app.json found in repository" });
