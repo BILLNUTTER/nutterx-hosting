@@ -4,12 +4,14 @@ import * as schema from "./schema/index.js";
 
 const { Pool } = pg;
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL must be set");
+const connectionString = process.env.PG_DATABASE_URL || process.env.DATABASE_URL;
+
+if (!connectionString) {
+  throw new Error("PG_DATABASE_URL or DATABASE_URL must be set");
 }
 
 export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString,
   ssl: { rejectUnauthorized: false },
   max: 10,
 });
