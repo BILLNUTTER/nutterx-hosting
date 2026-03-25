@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rm } from "fs";
 import path from "path";
 import os from "os";
 import { EventEmitter } from "events";
-import { eq, or } from "drizzle-orm";
+import { eq, or, sql } from "drizzle-orm";
 import { connectDb, db, apps, logs } from "@workspace/db";
 import type { App } from "@workspace/db";
 import { decrypt } from "../lib/crypto.js";
@@ -71,9 +71,9 @@ async function writeLog(appId: string, line: string, stream: "stdout" | "stderr"
   try {
     await connectDb();
     await db.insert(logs).values({ appId, line, stream, timestamp });
-    // Trim old logs: keep at most 10000 per app (fire-and-forget)
+    // Trim old logs: keep at most 500 per app (fire-and-forget)
     db.execute(
-      `DELETE FROM logs WHERE app_id = '${appId}' AND id NOT IN (SELECT id FROM logs WHERE app_id = '${appId}' ORDER BY timestamp DESC LIMIT 10000)`
+      sql`DELETE FROM logs WHERE app_id = ${appId} AND id NOT IN (SELECT id FROM logs WHERE app_id = ${appId} ORDER BY timestamp DESC LIMIT 500)`
     ).catch(() => {});
   } catch {}
 }

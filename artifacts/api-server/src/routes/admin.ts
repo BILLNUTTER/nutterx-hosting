@@ -9,6 +9,14 @@ import {
 import type { App } from "@workspace/db";
 import slugify from "slugify";
 import { startApp, stopApp, restartApp, subscribeToLogs } from "../services/processManager.js";
+import { encrypt, decrypt } from "../lib/crypto.js";
+
+function safeDecrypt(value: string): string {
+  try { return decrypt(value); } catch { return value; }
+}
+function encryptEnvVars(envVars: Array<{ key: string; value: string }>) {
+  return envVars.map((e) => ({ key: e.key, value: encrypt(e.value) }));
+}
 
 const ADMIN_OWNER_ID = "00000000-0000-0000-0000-000000000001";
 
@@ -371,7 +379,7 @@ router.post("/admin/users/:id/apps", requireAdmin, async (req, res) => {
       installCommand: installCommand ?? null,
       port: port ?? null,
       autoRestart: autoRestart ?? false,
-      envVars: envVars ?? [],
+      envVars: encryptEnvVars(envVars ?? []),
       status: "idle",
     }).returning();
 
@@ -432,7 +440,7 @@ function toAdminAppJson(app: App) {
     id: app.id, name: app.name, slug: app.slug, repoUrl: app.repoUrl, branch: app.branch ?? "main",
     status: app.status, startCommand: app.startCommand, installCommand: app.installCommand,
     port: app.port, autoRestart: app.autoRestart,
-    envVars: (app.envVars ?? []).map((e: { key: string; value: string }) => ({ key: e.key, value: e.value })),
+    envVars: (app.envVars ?? []).map((e: { key: string; value: string }) => ({ key: e.key, value: safeDecrypt(e.value) })),
     lastDeployedAt: app.lastDeployedAt?.toISOString(),
     createdAt: app.createdAt.toISOString(),
   };
@@ -470,7 +478,7 @@ router.post("/admin/my-apps", requireAdmin, async (req, res) => {
       ownerId: ADMIN_OWNER_ID, name, repoUrl, branch: branch ?? "main",
       slug, status: "idle", autoRestart: false,
       startCommand: startCommand ?? null, installCommand: installCommand ?? null,
-      port: port ?? null, envVars: envVars ?? [],
+      port: port ?? null, envVars: encryptEnvVars(envVars ?? []),
     }).returning();
 
     startApp(app.id).catch(() => {});
