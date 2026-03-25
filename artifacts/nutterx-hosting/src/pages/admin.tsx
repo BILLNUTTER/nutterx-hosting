@@ -309,7 +309,7 @@ export default function Admin() {
 
   const closeWizard = () => { setWizardOpen(false); setWizardTarget(null); resetWizard(); };
 
-  const wFetchMeta = async () => {
+  const wFetchMeta = async (silent = false) => {
     if (!wRepoUrl) return;
     setWIsFetchingMeta(true);
     try {
@@ -319,11 +319,11 @@ export default function Admin() {
         const meta = await res.json();
         if (meta.startCommand && !wStartCmd) setWStartCmd(meta.startCommand);
         if (meta.installCommand && !wInstallCmd) setWInstallCmd(meta.installCommand);
-        toast({ title: "Commands detected", description: "Install and start commands auto-filled from repo." });
+        if (!silent) toast({ title: "Settings detected", description: "Install/start commands pre-filled from package.json." });
       } else {
-        toast({ title: "No package.json found", description: "Fill in commands manually.", variant: "destructive" });
+        if (!silent) toast({ title: "No package.json found", description: "Fill in commands manually.", variant: "destructive" });
       }
-    } catch { toast({ title: "Auto-detect failed", variant: "destructive" }); }
+    } catch { if (!silent) toast({ title: "Auto-detect failed", variant: "destructive" }); }
     finally { setWIsFetchingMeta(false); }
   };
 
@@ -352,10 +352,14 @@ export default function Admin() {
 
   const handleWizardNext = async () => {
     if (wizardStep === 1) {
-      if (!wName || !wRepoUrl) { toast({ title: "Name and Repo URL are required", variant: "destructive" }); return; }
+      if (!wName || !wRepoUrl) {
+        toast({ title: "Missing fields", description: "Name and Repo URL are required.", variant: "destructive" });
+        return;
+      }
       setWizardStep(2);
+      // Run both fetches silently in parallel — same as user wizard
       wFetchEnv();
-      if (!wStartCmd && !wInstallCmd) wFetchMeta();
+      wFetchMeta(true);
     } else if (wizardStep === 2) {
       setWizardStep(3);
     }
@@ -1259,35 +1263,51 @@ export default function Admin() {
           {wizardStep === 1 && (
             <div className="space-y-3 py-1">
               <div className="space-y-1.5">
-                <Label>App Name *</Label>
-                <Input value={wName} onChange={(e) => setWName(e.target.value)} placeholder="my-discord-bot" />
+                <Label>Application Name *</Label>
+                <Input value={wName} onChange={(e) => setWName(e.target.value)} placeholder="my-discord-bot" className="h-10 font-mono text-sm" />
               </div>
               <div className="space-y-1.5">
-                <Label className="flex items-center gap-1"><Github className="w-3.5 h-3.5" /> GitHub Repo URL *</Label>
-                <Input value={wRepoUrl} onChange={(e) => setWRepoUrl(e.target.value)} placeholder="https://github.com/user/repo" className="font-mono text-sm" />
+                <Label className="flex items-center gap-1"><Github className="w-3.5 h-3.5" /> GitHub Repository URL *</Label>
+                <div className="relative">
+                  <Github className="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    value={wRepoUrl}
+                    onChange={(e) => setWRepoUrl(e.target.value)}
+                    onBlur={() => { if (wRepoUrl) wFetchMeta(true); }}
+                    placeholder="https://github.com/username/repo"
+                    className="pl-9 h-10 font-mono text-sm"
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1.5">
                   <Label>Branch</Label>
-                  <Input value={wBranch} onChange={(e) => setWBranch(e.target.value)} placeholder="main" />
+                  <Input value={wBranch} onChange={(e) => setWBranch(e.target.value)} placeholder="main" className="h-9" />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="flex items-center gap-1">PAT <span className="text-muted-foreground text-[10px]">(private repos)</span></Label>
-                  <Input value={wPat} onChange={(e) => setWPat(e.target.value)} type="password" placeholder="ghp_..." className="font-mono text-sm" />
+                  <Input value={wPat} onChange={(e) => setWPat(e.target.value)} type="password" placeholder="ghp_..." className="font-mono text-sm h-9" />
                 </div>
               </div>
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <Label className="flex items-center gap-1"><Package className="w-3.5 h-3.5" /> Install Command</Label>
-                  <Button size="sm" variant="ghost" className="h-6 text-[11px] gap-1 px-2" onClick={wFetchMeta} disabled={!wRepoUrl || wIsFetchingMeta}>
-                    {wIsFetchingMeta ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />} Auto-detect
+              <div className="pt-2 border-t border-border">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+                    <Terminal className="w-3.5 h-3.5" /> Build &amp; Run Settings
+                  </p>
+                  <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1 px-2" onClick={() => wFetchMeta(false)} disabled={!wRepoUrl || wIsFetchingMeta}>
+                    {wIsFetchingMeta ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />} Auto-detect from repo
                   </Button>
                 </div>
-                <Input value={wInstallCmd} onChange={(e) => setWInstallCmd(e.target.value)} placeholder="npm install" className="font-mono text-sm" />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="flex items-center gap-1"><Play className="w-3.5 h-3.5" /> Start Command</Label>
-                <Input value={wStartCmd} onChange={(e) => setWStartCmd(e.target.value)} placeholder="node index.js" className="font-mono text-sm" />
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Install Command</Label>
+                    <Input value={wInstallCmd} onChange={(e) => setWInstallCmd(e.target.value)} placeholder="npm install (auto-detected)" className="font-mono text-xs h-9" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Start Command</Label>
+                    <Input value={wStartCmd} onChange={(e) => setWStartCmd(e.target.value)} placeholder="npm start (auto-detected)" className="font-mono text-xs h-9" />
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -1354,46 +1374,34 @@ export default function Admin() {
 
           {/* Step 3: Review */}
           {wizardStep === 3 && (
-            <div className="space-y-3 py-1 text-sm">
-              <div className="rounded-md border border-border overflow-hidden divide-y divide-border">
-                <div className="grid grid-cols-[120px_1fr] px-3 py-2 bg-muted/30">
-                  <span className="text-muted-foreground text-xs font-medium">App Name</span>
-                  <span className="font-semibold">{wName}</span>
+            <div className="space-y-3 py-1">
+              <div className="flex flex-col items-center text-center mb-2">
+                <div className="w-14 h-14 bg-primary/10 rounded-full flex items-center justify-center mb-3">
+                  <Rocket className="w-7 h-7 text-primary" />
                 </div>
-                <div className="grid grid-cols-[120px_1fr] px-3 py-2">
-                  <span className="text-muted-foreground text-xs font-medium">Repository</span>
-                  <span className="font-mono text-xs break-all">{wRepoUrl}</span>
-                </div>
-                <div className="grid grid-cols-[120px_1fr] px-3 py-2 bg-muted/30">
-                  <span className="text-muted-foreground text-xs font-medium">Branch</span>
-                  <span className="font-mono text-xs">{wBranch || "main"}</span>
-                </div>
-                {wInstallCmd && (
-                  <div className="grid grid-cols-[120px_1fr] px-3 py-2">
-                    <span className="text-muted-foreground text-xs font-medium">Install</span>
-                    <span className="font-mono text-xs">{wInstallCmd}</span>
-                  </div>
-                )}
-                {wStartCmd && (
-                  <div className="grid grid-cols-[120px_1fr] px-3 py-2 bg-muted/30">
-                    <span className="text-muted-foreground text-xs font-medium">Start</span>
-                    <span className="font-mono text-xs">{wStartCmd}</span>
-                  </div>
-                )}
-                <div className="grid grid-cols-[120px_1fr] px-3 py-2">
-                  <span className="text-muted-foreground text-xs font-medium">Env Vars</span>
-                  <span>{wEnvVars.filter((e) => e.key.trim()).length} variable{wEnvVars.filter((e) => e.key.trim()).length !== 1 ? "s" : ""}</span>
-                </div>
-                {wizardTarget?.kind === "user" && (
-                  <div className="grid grid-cols-[120px_1fr] px-3 py-2 bg-muted/30">
-                    <span className="text-muted-foreground text-xs font-medium">Owner</span>
-                    <span>{wizardTarget.email}</span>
-                  </div>
-                )}
+                <h3 className="font-bold text-base">Ready for Liftoff</h3>
+                <p className="text-xs text-muted-foreground mt-1">
+                  <strong>{wName}</strong> will be cloned, built, and launched automatically.
+                  {wizardTarget?.kind === "user" && <> App will be owned by <strong>{wizardTarget.email}</strong>.</>}
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <div className="bg-black/30 border border-border rounded-xl p-3 font-mono text-xs space-y-1">
+                {[
+                  { label: "Repo", value: wRepoUrl.split("/").slice(-2).join("/") },
+                  { label: "Branch", value: wBranch || "main" },
+                  { label: "Env Vars", value: `${wEnvVars.filter((e) => e.key.trim()).length} key${wEnvVars.filter((e) => e.key.trim()).length !== 1 ? "s" : ""}` },
+                  ...(wInstallCmd ? [{ label: "Install", value: wInstallCmd }] : []),
+                  ...(wStartCmd ? [{ label: "Start", value: wStartCmd }] : []),
+                ].map(({ label, value }, i, arr) => (
+                  <div key={label} className={`flex justify-between py-1 ${i < arr.length - 1 ? "border-b border-white/5" : ""}`}>
+                    <span className="text-zinc-500">{label}</span>
+                    <span className="text-zinc-200 truncate ml-4 max-w-[200px]">{value}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground flex items-center gap-1.5 pt-1">
                 <Info className="w-3.5 h-3.5 flex-shrink-0" />
-                The repo will be cloned and the app started automatically after creation.
+                Logs will stream live once deployment begins.
               </p>
             </div>
           )}

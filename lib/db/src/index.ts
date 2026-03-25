@@ -129,25 +129,36 @@ CREATE TABLE IF NOT EXISTS pesapal_settings (
 );
 `;
 
-async function tryConnect(url: string): Promise<pg.Pool | null> {
-  const testPool = new Pool({
-    connectionString: url,
-    ssl: { rejectUnauthorized: false },
-    max: 1,
-    connectionTimeoutMillis: 5000,
-  });
-  try {
-    const client = await testPool.connect();
-    client.release();
-    return new Pool({
+async function tryConnect(url: string, attempts = 3): Promise<pg.Pool | null> {
+  for (let i = 0; i < attempts; i++) {
+    const testPool = new Pool({
       connectionString: url,
       ssl: { rejectUnauthorized: false },
-      max: 10,
+      max: 1,
+      connectionTimeoutMillis: 15000,
+      idleTimeoutMillis: 5000,
     });
-  } catch {
-    await testPool.end().catch(() => {});
-    return null;
+    try {
+      const client = await testPool.connect();
+      client.release();
+      await testPool.end().catch(() => {});
+      return new Pool({
+        connectionString: url,
+        ssl: { rejectUnauthorized: false },
+        max: 10,
+        connectionTimeoutMillis: 15000,
+        idleTimeoutMillis: 30000,
+      });
+    } catch (err) {
+      await testPool.end().catch(() => {});
+      if (i < attempts - 1) {
+        const delay = (i + 1) * 2000;
+        console.warn(`[db] Connection attempt ${i + 1} failed, retrying in ${delay}ms...`);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
   }
+  return null;
 }
 
 let migrated = false;
