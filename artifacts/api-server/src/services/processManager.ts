@@ -180,7 +180,8 @@ export async function startApp(appId: string): Promise<void> {
   await createDeploymentRecord(appId, branch, "user");
 
   const appDir = getAppDir(app.slug);
-  await removeDir(appDir);
+  // NOTE: We do NOT delete the entire app dir here — we keep node_modules cached
+  // between deploys for dramatically faster installs. Only remove on explicit delete.
 
   try {
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
@@ -188,10 +189,31 @@ export async function startApp(appId: string): Promise<void> {
     const cloneUrl = app.pat
       ? app.repoUrl.replace("https://", `https://${app.pat}@`)
       : app.repoUrl;
-    writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
-    await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId);
 
-    // Capture commit hash before deleting git history
+    const hasGitDir = existsSync(path.join(appDir, ".git"));
+    if (hasGitDir) {
+      // Incremental update: fetch latest commit without re-downloading everything
+      writeLog(appId, `Updating repository: ${app.repoUrl} (branch: ${branch})`, "system");
+      try {
+        // Update the remote URL in case the PAT changed
+        await runCommand("git", ["remote", "set-url", "origin", cloneUrl], appDir, appId, undefined, 30_000);
+        await runCommand("git", ["fetch", "--depth", "1", "origin", branch], appDir, appId, undefined, 5 * 60_000);
+        await runCommand("git", ["reset", "--hard", `origin/${branch}`], appDir, appId, undefined, 60_000);
+        await runCommand("git", ["clean", "-fd"], appDir, appId, undefined, 60_000);
+      } catch {
+        // If incremental update fails, fall back to fresh clone
+        writeLog(appId, `Incremental update failed — falling back to fresh clone...`, "system");
+        await removeDir(appDir);
+        await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId, undefined, 5 * 60_000);
+      }
+    } else {
+      // First deploy: fresh clone
+      await removeDir(appDir);
+      writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
+      await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId, undefined, 5 * 60_000);
+    }
+
+    // Capture commit hash (keep .git — needed for future incremental updates)
     try {
       const commitHash = execSync("git rev-parse HEAD", { cwd: appDir }).toString().trim();
       const deployment = activeDeployments.get(appId);
@@ -200,21 +222,23 @@ export async function startApp(appId: string): Promise<void> {
       }
     } catch { /* non-fatal */ }
 
-    // Remove git history — not needed at runtime, frees 10–50MB per app
-    removeDir(path.join(appDir, ".git")).catch(() => {});
-
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
     const pm = detectPackageManager(appDir);
-    const hasPackageLock = existsSync(path.join(appDir, "package-lock.json"));
-    const hasPnpmLock    = existsSync(path.join(appDir, "pnpm-lock.yaml"));
-    const hasYarnLock    = existsSync(path.join(appDir, "yarn.lock"));
+    const hasPackageLock   = existsSync(path.join(appDir, "package-lock.json"));
+    const hasPnpmLock      = existsSync(path.join(appDir, "pnpm-lock.yaml"));
+    const hasYarnLock      = existsSync(path.join(appDir, "yarn.lock"));
+    // If node_modules already exists (cached from a previous deploy), avoid npm ci
+    // which would wipe and re-download everything. Use npm install instead so only
+    // changed packages are fetched, then prune removed ones.
+    const hasNodeModules   = existsSync(path.join(appDir, "node_modules"));
 
     // Default: use ci/frozen-lockfile variant when lockfile is present (much faster)
     let installCmd = app.installCommand || (
       pm === "pnpm" ? "pnpm install" :
       pm === "yarn" ? "yarn install"  :
-      hasPackageLock ? "npm ci" : "npm install"
+      // Never use npm ci when node_modules is cached — it deletes them first
+      (hasPackageLock && !hasNodeModules) ? "npm ci" : "npm install"
     );
 
     if (/^\s*npm\s+ci(\s|$)/.test(installCmd)) {
@@ -236,6 +260,11 @@ export async function startApp(appId: string): Promise<void> {
       if (!hasYarnLock && !/--prefer-offline/.test(installCmd)) installCmd += " --prefer-offline";
     }
 
+    // Shared npm/pnpm/yarn cache directory — persists across ALL app deploys so
+    // packages only download once and subsequent installs use the local cache.
+    const npmCacheDir = path.join(os.homedir(), ".nutterx-npm-cache");
+    if (!existsSync(npmCacheDir)) mkdirSync(npmCacheDir, { recursive: true });
+
     const pythonPath = await getPythonPath();
     const installEnv: Record<string, string> = {
       ...(process.env as Record<string, string>),
@@ -244,6 +273,10 @@ export async function startApp(appId: string): Promise<void> {
       npm_config_audit: "false",
       npm_config_fund: "false",
       npm_config_prefer_offline: "true",
+      // Point all package managers to the shared cache
+      npm_config_cache: npmCacheDir,
+      YARN_CACHE_FOLDER: path.join(npmCacheDir, "yarn"),
+      PNPM_STORE_DIR: path.join(npmCacheDir, "pnpm-store"),
       ...(pythonPath ? { npm_config_python: pythonPath, PYTHON: pythonPath } : {}),
       ...(NPM_GLOBAL_BIN ? { PATH: `${NPM_GLOBAL_BIN}:${process.env.PATH ?? ""}` } : {}),
     };
