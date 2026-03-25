@@ -204,8 +204,6 @@ export async function startApp(appId: string): Promise<void> {
   await createDeploymentRecord(appId, branch, "user");
 
   const appDir = getAppDir(app.slug);
-  // NOTE: We do NOT delete the entire app dir here — we keep node_modules cached
-  // between deploys for dramatically faster installs. Only remove on explicit delete.
 
   try {
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
@@ -214,30 +212,14 @@ export async function startApp(appId: string): Promise<void> {
       ? app.repoUrl.replace("https://", `https://${app.pat}@`)
       : app.repoUrl;
 
-    const hasGitDir = existsSync(path.join(appDir, ".git"));
-    if (hasGitDir) {
-      // Incremental update: fetch latest commit without re-downloading everything
-      writeLog(appId, `Updating repository: ${app.repoUrl} (branch: ${branch})`, "system");
-      try {
-        // Update the remote URL in case the PAT changed
-        await runCommand("git", ["remote", "set-url", "origin", cloneUrl], appDir, appId, undefined, 30_000);
-        await runCommand("git", ["fetch", "--depth", "1", "origin", branch], appDir, appId, undefined, 5 * 60_000);
-        await runCommand("git", ["reset", "--hard", `origin/${branch}`], appDir, appId, undefined, 60_000);
-        await runCommand("git", ["clean", "-fd"], appDir, appId, undefined, 60_000);
-      } catch {
-        // If incremental update fails, fall back to fresh clone
-        writeLog(appId, `Incremental update failed — falling back to fresh clone...`, "system");
-        await removeDir(appDir);
-        await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId, undefined, 5 * 60_000);
-      }
-    } else {
-      // First deploy: fresh clone
-      await removeDir(appDir);
-      writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
-      await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId, undefined, 5 * 60_000);
-    }
+    // Always do a fresh clone — avoids stale .git state causing git fetch to
+    // hang for minutes before timing out. The shared npm cache (~/.nutterx-npm-cache)
+    // is the real speed win: packages only download from the internet once.
+    writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
+    await removeDir(appDir);
+    await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId, undefined, 3 * 60_000);
 
-    // Capture commit hash (keep .git — needed for future incremental updates)
+    // Capture commit hash, then remove git history (not needed at runtime)
     try {
       const commitHash = execSync("git rev-parse HEAD", { cwd: appDir }).toString().trim();
       const deployment = activeDeployments.get(appId);
@@ -245,6 +227,7 @@ export async function startApp(appId: string): Promise<void> {
         db.update(deployments).set({ commitHash }).where(eq(deployments.id, deployment.id)).catch(() => {});
       }
     } catch { /* non-fatal */ }
+    removeDir(path.join(appDir, ".git")).catch(() => {});
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
@@ -252,15 +235,12 @@ export async function startApp(appId: string): Promise<void> {
     const hasPackageLock = existsSync(path.join(appDir, "package-lock.json"));
     const hasPnpmLock    = existsSync(path.join(appDir, "pnpm-lock.yaml"));
     const hasYarnLock    = existsSync(path.join(appDir, "yarn.lock"));
-    // Keep node_modules from previous deploy — only fetch what changed
-    const hasNodeModules = existsSync(path.join(appDir, "node_modules"));
 
-    // Pick the right install command; never use npm ci when node_modules is cached
-    // because npm ci deletes them first, defeating the whole point of caching.
+    // Use npm ci when a lockfile is present (faster, exact installs)
     let installCmd = app.installCommand || (
       pm === "pnpm" ? "pnpm install" :
       pm === "yarn" ? "yarn install"  :
-      (hasPackageLock && !hasNodeModules) ? "npm ci" : "npm install"
+      hasPackageLock ? "npm ci" : "npm install"
     );
 
     // Append speed flags without overriding anything the user already set.
