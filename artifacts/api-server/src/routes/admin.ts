@@ -74,7 +74,7 @@ router.get("/admin/stats", requireAdmin, async (req, res) => {
     });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -114,7 +114,7 @@ router.get("/admin/users", requireAdmin, async (req, res) => {
     })));
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -128,7 +128,7 @@ router.get("/admin/users/:id/apps", requireAdmin, async (req, res) => {
     })));
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -150,7 +150,7 @@ router.patch("/admin/users/:id/status", requireAdmin, async (req, res) => {
     res.json({ id: user.id, status: user.status });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -175,7 +175,7 @@ router.delete("/admin/users/:id", requireAdmin, async (req, res) => {
     res.json({ message: "User and all associated data deleted" });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -191,7 +191,7 @@ router.get("/admin/password-requests", requireAdmin, async (req, res) => {
     })));
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -211,7 +211,7 @@ router.patch("/admin/password-requests/:id/resolve", requireAdmin, async (req, r
     res.json({ message: "Password updated successfully" });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -224,7 +224,7 @@ router.patch("/admin/password-requests/:id/reject", requireAdmin, async (req, re
     res.json({ message: "Request rejected" });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -246,7 +246,7 @@ router.get("/admin/apps", requireAdmin, async (req, res) => {
     })));
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -280,7 +280,7 @@ router.get("/admin/repo-meta", requireAdmin, async (req, res) => {
       installCommand = `${pm} install`;
     }
     res.json({ startCommand, buildCommand: scripts.build ?? null, installCommand, scripts: Object.keys(scripts) });
-  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
 });
 
 router.get("/admin/env-template", requireAdmin, async (req, res) => {
@@ -370,7 +370,7 @@ router.get("/admin/env-template", requireAdmin, async (req, res) => {
     }
 
     res.status(404).json({ error: "No .env.example or app.json found in repository" });
-  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
 });
 
 router.post("/admin/users/:id/apps", requireAdmin, async (req, res) => {
@@ -409,7 +409,7 @@ router.post("/admin/users/:id/apps", requireAdmin, async (req, res) => {
     res.status(201).json({ id: app.id, name: app.name, slug: app.slug, status: app.status });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -438,7 +438,7 @@ router.post("/admin/users/:id/subscription", requireAdmin, async (req, res) => {
     res.json({ message: "30-day subscription granted", expiresAt });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -453,7 +453,7 @@ router.delete("/admin/users/:id/subscription", requireAdmin, async (req, res) =>
     res.json({ message: "Subscription deactivated" });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -476,7 +476,7 @@ router.get("/admin/my-apps", requireAdmin, async (req, res) => {
       id: a.id, name: a.name, slug: a.slug, repoUrl: a.repoUrl,
       status: a.status, lastDeployedAt: a.lastDeployedAt?.toISOString(), createdAt: a.createdAt.toISOString(),
     })));
-  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
 });
 
 router.post("/admin/my-apps", requireAdmin, async (req, res) => {
@@ -505,7 +505,7 @@ router.post("/admin/my-apps", requireAdmin, async (req, res) => {
 
     startApp(app.id).catch(() => {});
     res.status(201).json(toAdminAppJson(app));
-  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
 });
 
 router.get("/admin/my-apps/:id", requireAdmin, async (req, res) => {
@@ -514,7 +514,7 @@ router.get("/admin/my-apps/:id", requireAdmin, async (req, res) => {
     const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     res.json(toAdminAppJson(app));
-  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
 });
 
 router.delete("/admin/my-apps/:id", requireAdmin, async (req, res) => {
@@ -528,7 +528,7 @@ router.delete("/admin/my-apps/:id", requireAdmin, async (req, res) => {
     await db.delete(apps).where(eq(apps.id, app.id));
     deleteAppFiles(app.slug).catch(() => {});
     res.json({ message: "App deleted" });
-  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
 });
 
 router.put("/admin/my-apps/:id", requireAdmin, async (req, res) => {
@@ -550,7 +550,7 @@ router.put("/admin/my-apps/:id", requireAdmin, async (req, res) => {
     if (envVars !== undefined) update.envVars = encryptEnvVars(envVars.filter((e) => e.key.trim()));
     const [updated] = await db.update(apps).set(update as any).where(eq(apps.id, app.id)).returning();
     res.json(toAdminAppJson(updated));
-  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
 });
 
 router.post("/admin/my-apps/:id/redeploy", requireAdmin, async (req, res) => {
@@ -560,7 +560,7 @@ router.post("/admin/my-apps/:id/redeploy", requireAdmin, async (req, res) => {
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     restartApp(app.id).catch(() => {});
     res.json({ message: "Redeploy initiated" });
-  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
 });
 
 router.post("/admin/my-apps/:id/start", requireAdmin, async (req, res) => {
@@ -570,7 +570,7 @@ router.post("/admin/my-apps/:id/start", requireAdmin, async (req, res) => {
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     startApp(app.id).catch(() => {});
     res.json({ message: "Start initiated" });
-  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
 });
 
 router.post("/admin/my-apps/:id/stop", requireAdmin, async (req, res) => {
@@ -580,7 +580,7 @@ router.post("/admin/my-apps/:id/stop", requireAdmin, async (req, res) => {
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     await stopApp(app.id);
     res.json({ message: "App stopped" });
-  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
 });
 
 router.post("/admin/my-apps/:id/restart", requireAdmin, async (req, res) => {
@@ -590,7 +590,7 @@ router.post("/admin/my-apps/:id/restart", requireAdmin, async (req, res) => {
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     restartApp(app.id).catch(() => {});
     res.json({ message: "Restart initiated" });
-  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
 });
 
 router.get("/admin/my-apps/:id/logs/stream", async (req, res) => {
@@ -628,7 +628,7 @@ router.get("/admin/my-apps/:id/logs/stream", async (req, res) => {
     const unsubscribe = subscribeToLogs(app.id, (ev) => send({ line: ev.line, stream: ev.stream, timestamp: ev.timestamp.toISOString() }));
     const keepAlive = setInterval(() => { res.write(": ping\n\n"); flush(); }, 15000);
     req.on("close", () => { unsubscribe(); clearInterval(keepAlive); });
-  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
 });
 
 router.patch("/admin/apps/:id/action", requireAdmin, async (req, res) => {
@@ -642,7 +642,7 @@ router.patch("/admin/apps/:id/action", requireAdmin, async (req, res) => {
     res.json({ id: app.id, status: updated?.status ?? app.status });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -665,7 +665,7 @@ router.get("/admin/revenue", requireAdmin, async (req, res) => {
     });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -703,7 +703,7 @@ router.get("/admin/settings", requireAdmin, async (req, res) => {
     });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -728,7 +728,7 @@ router.put("/admin/settings", requireAdmin, async (req, res) => {
     }
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 

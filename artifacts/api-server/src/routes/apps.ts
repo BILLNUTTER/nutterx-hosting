@@ -72,7 +72,7 @@ router.get("/apps", requireAuth, async (req: Request, res: Response) => {
     res.json(result.map(toApiApp));
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -160,7 +160,7 @@ router.get("/apps/env-template", requireAuth, async (req: Request, res: Response
     res.status(404).json({ error: "No .env.example or app.json found in repository" });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -245,7 +245,7 @@ router.get("/apps/repo-meta", requireAuth, async (req: Request, res: Response) =
     res.json({ startCommand, buildCommand, installCommand, port, scripts: Object.keys(scripts) });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -303,8 +303,9 @@ router.post("/apps", requireAuth, async (req: Request, res: Response) => {
 
     res.status(201).json(toApiApp(app));
   } catch (err) {
-    req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const msg = err instanceof Error ? err.message : String(err);
+    req.log.error({ err, msg }, "POST /apps failed");
+    res.status(500).json({ error: msg });
   }
 });
 
@@ -319,7 +320,7 @@ router.get("/apps/:id", requireAuth, async (req: Request, res: Response) => {
     res.json(toApiApp(app));
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -351,7 +352,7 @@ router.patch("/apps/:id", requireAuth, async (req: Request, res: Response) => {
     res.json(toApiApp(app));
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -364,7 +365,7 @@ router.get("/apps/:id/deployments", requireAuth, async (req: Request, res: Respo
     res.json(rows);
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -386,7 +387,7 @@ router.delete("/apps/:id", requireAuth, async (req: Request, res: Response) => {
     res.json({ message: "App deleted successfully" });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -411,7 +412,7 @@ router.put("/apps/:id/env", requireAuth, async (req: Request, res: Response) => 
     res.json(toApiApp(app));
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -424,7 +425,7 @@ router.post("/apps/:id/start", requireAuth, async (req: Request, res: Response) 
     res.json({ message: "App start initiated" });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -437,7 +438,7 @@ router.post("/apps/:id/stop", requireAuth, async (req: Request, res: Response) =
     res.json({ message: "App stopped" });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -450,7 +451,7 @@ router.post("/apps/:id/restart", requireAuth, async (req: Request, res: Response
     res.json({ message: "App restart initiated" });
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -472,7 +473,7 @@ router.get("/apps/:id/logs", requireAuth, async (req: Request, res: Response) =>
     })));
   } catch (err) {
     req.log.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
   }
 });
 
@@ -509,7 +510,7 @@ router.get("/apps/:id/logs/stream", requireAuth, async (req: Request, res: Respo
     req.on("close", () => { clearInterval(keepAlive); unsubscribe(); });
   } catch (err) {
     req.log.error(err);
-    if (!res.headersSent) res.status(500).json({ error: "Internal server error" });
+    if (!res.headersSent) { const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em }); }
   }
 });
 
