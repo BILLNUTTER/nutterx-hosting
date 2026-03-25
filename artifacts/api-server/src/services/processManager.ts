@@ -133,7 +133,11 @@ function emitLines(appId: string, chunk: Buffer, stream: "stdout" | "stderr" | "
   for (const line of lines) writeLog(appId, line, stream);
 }
 
-async function runCommand(cmd: string, args: string[], cwd: string, appId: string, env?: Record<string, string>, timeoutMs = 10 * 60 * 1000): Promise<void> {
+async function runCommand(
+  cmd: string, args: string[], cwd: string, appId: string,
+  env?: Record<string, string>, timeoutMs = 10 * 60 * 1000,
+  heartbeatIntervalMs?: number,
+): Promise<{ timedOut: boolean }> {
   return new Promise((resolve, reject) => {
     if (stopRequested.has(appId)) { reject(new Error("Build cancelled by user")); return; }
     const proc = spawn(cmd, args, { cwd, env: env ?? process.env, shell: true });
@@ -141,20 +145,40 @@ async function runCommand(cmd: string, args: string[], cwd: string, appId: strin
     proc.stdout?.on("data", (d: Buffer) => emitLines(appId, d, "system"));
     proc.stderr?.on("data", (d: Buffer) => emitLines(appId, d, "stderr"));
 
+    let timedOut = false;
+    const startMs = Date.now();
+
+    // Optional heartbeat: print "still running..." every N seconds so log stream
+    // doesn't appear frozen during long silent downloads.
+    const heartbeat = heartbeatIntervalMs
+      ? setInterval(() => {
+          const elapsed = Math.round((Date.now() - startMs) / 1000);
+          writeLog(appId, `  ⏳ Still installing… (${elapsed}s elapsed)`, "system");
+        }, heartbeatIntervalMs)
+      : null;
+
     const timer = setTimeout(() => {
+      timedOut = true;
+      if (heartbeat) clearInterval(heartbeat);
       proc.kill("SIGKILL");
       buildProcs.delete(appId);
-      reject(new Error(`Command timed out after ${timeoutMs / 60000} minutes: ${cmd} ${args.join(" ")}`));
+      reject(Object.assign(new Error(`Command timed out after ${Math.round(timeoutMs / 60000)} minutes: ${cmd} ${args.join(" ")}`), { timedOut: true }));
     }, timeoutMs);
 
     proc.on("close", (code) => {
       clearTimeout(timer);
+      if (heartbeat) clearInterval(heartbeat);
       buildProcs.delete(appId);
-      if (code === 0) resolve();
+      if (code === 0) resolve({ timedOut: false });
       else if (code === null && stopRequested.has(appId)) reject(new Error("Build cancelled by user"));
       else reject(new Error(`Process exited with code ${code}`));
     });
-    proc.on("error", (err) => { clearTimeout(timer); buildProcs.delete(appId); reject(err); });
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      if (heartbeat) clearInterval(heartbeat);
+      buildProcs.delete(appId);
+      reject(err);
+    });
   });
 }
 
@@ -239,16 +263,22 @@ export async function startApp(appId: string): Promise<void> {
       (hasPackageLock && !hasNodeModules) ? "npm ci" : "npm install"
     );
 
-    // Append speed flags without overriding anything the user already set
+    // Append speed flags without overriding anything the user already set.
+    // --no-optional skips optionalDependencies (e.g. canvas, sharp in baileys)
+    // which are the #1 cause of slow native-compilation stalls on limited servers.
     if (/^\s*npm(\s|$)/.test(installCmd)) {
       if (!/--ignore-platform/.test(installCmd))   installCmd += " --ignore-platform";
       if (!/--no-audit/.test(installCmd))          installCmd += " --no-audit";
       if (!/--no-fund/.test(installCmd))           installCmd += " --no-fund";
+      if (!/--prefer-offline/.test(installCmd))    installCmd += " --prefer-offline";
+      if (!/--no-optional/.test(installCmd))       installCmd += " --no-optional";
       if (!/--legacy-peer-deps/.test(installCmd))  installCmd += " --legacy-peer-deps";
     } else if (/^\s*pnpm(\s|$)/.test(installCmd)) {
       if (!/--ignore-platform/.test(installCmd))   installCmd += " --ignore-platform";
+      if (!/--prefer-offline/.test(installCmd))    installCmd += " --prefer-offline";
       if (hasPnpmLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
     } else if (/^\s*yarn(\s|$)/.test(installCmd)) {
+      if (!/--prefer-offline/.test(installCmd))    installCmd += " --prefer-offline";
       if (hasYarnLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
     }
 
@@ -271,21 +301,36 @@ export async function startApp(appId: string): Promise<void> {
       ...(NPM_GLOBAL_BIN ? { PATH: `${NPM_GLOBAL_BIN}:${process.env.PATH ?? ""}` } : {}),
     };
 
-    // 15-minute install timeout; heavy bots (baileys 500+ deps) need the headroom.
-    // Subsequent deploys use cached node_modules and finish in well under a minute.
-    const INSTALL_TIMEOUT = 15 * 60_000;
+    // 15-minute install timeout. Heavy bots (baileys + 500 deps) typically finish
+    // in 5-8 min. Heartbeat every 30s so the log stream doesn't look frozen.
+    const INSTALL_TIMEOUT    = 15 * 60_000;
+    const HEARTBEAT_INTERVAL = 30_000;
 
     const [installBin, ...installArgs] = installCmd.split(" ");
     writeLog(appId, `Installing dependencies with: ${installCmd}`, "system");
     try {
-      await runCommand(installBin, installArgs, appDir, appId, installEnv, INSTALL_TIMEOUT);
+      await runCommand(installBin, installArgs, appDir, appId, installEnv, INSTALL_TIMEOUT, HEARTBEAT_INTERVAL);
+      writeLog(appId, `✅ Dependencies installed successfully.`, "system");
     } catch (installErr) {
+      const isTimeout = (installErr as { timedOut?: boolean }).timedOut === true;
       const errMsg = installErr instanceof Error ? installErr.message : String(installErr);
+
+      if (isTimeout) {
+        // No point retrying — if 15 min wasn't enough, another 15 won't be.
+        // Clean up partially-written node_modules so next deploy starts fresh.
+        writeLog(appId, `Install timed out after 15 minutes. Cleaning up for next attempt...`, "stderr");
+        await removeDir(path.join(appDir, "node_modules")).catch(() => {});
+        throw new Error("Dependency installation timed out after 15 minutes. The app may have too many packages. Try setting a custom install command in the app settings.");
+      }
+
+      // Non-timeout failure (peer dep conflict, etc.): retry without postinstall scripts
       writeLog(appId, `Install failed: ${errMsg}`, "stderr");
       writeLog(appId, `Retrying without postinstall scripts (--ignore-scripts)...`, "system");
+      // Remove potentially corrupted node_modules before retry
+      await removeDir(path.join(appDir, "node_modules")).catch(() => {});
       const fallbackArgs = [...installArgs.filter(a => a !== "--ignore-scripts"), "--ignore-scripts"];
-      await runCommand(installBin, fallbackArgs, appDir, appId, installEnv, INSTALL_TIMEOUT);
-      writeLog(appId, `Dependencies installed (postinstall scripts skipped).`, "system");
+      await runCommand(installBin, fallbackArgs, appDir, appId, installEnv, INSTALL_TIMEOUT, HEARTBEAT_INTERVAL);
+      writeLog(appId, `✅ Dependencies installed (postinstall scripts skipped).`, "system");
     }
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
