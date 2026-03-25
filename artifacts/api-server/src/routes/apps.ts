@@ -289,7 +289,7 @@ router.post("/apps", requireAuth, async (req: Request, res: Response) => {
 router.get("/apps/:id", requireAuth, async (req: Request, res: Response) => {
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId))).limit(1);
     if (!app) {
       res.status(404).json({ error: "App not found" });
       return;
@@ -320,7 +320,7 @@ router.patch("/apps/:id", requireAuth, async (req: Request, res: Response) => {
 
     const [app] = await db.update(apps)
       .set(update as any)
-      .where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId)))
+      .where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId)))
       .returning();
     if (!app) {
       res.status(404).json({ error: "App not found" });
@@ -336,7 +336,7 @@ router.patch("/apps/:id", requireAuth, async (req: Request, res: Response) => {
 router.delete("/apps/:id", requireAuth, async (req: Request, res: Response) => {
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId))).limit(1);
     if (!app) {
       res.status(404).json({ error: "App not found" });
       return;
@@ -365,7 +365,7 @@ router.put("/apps/:id/env", requireAuth, async (req: Request, res: Response) => 
 
     const [app] = await db.update(apps)
       .set({ envVars: encryptEnvVars(envVars), updatedAt: new Date() })
-      .where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId)))
+      .where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId)))
       .returning();
     if (!app) {
       res.status(404).json({ error: "App not found" });
@@ -381,7 +381,7 @@ router.put("/apps/:id/env", requireAuth, async (req: Request, res: Response) => 
 router.post("/apps/:id/start", requireAuth, async (req: Request, res: Response) => {
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     startApp(app.id).catch((err) => { req.log.error(err, "App start failed"); });
     res.json({ message: "App start initiated" });
@@ -394,7 +394,7 @@ router.post("/apps/:id/start", requireAuth, async (req: Request, res: Response) 
 router.post("/apps/:id/stop", requireAuth, async (req: Request, res: Response) => {
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     await stopApp(app.id);
     res.json({ message: "App stopped" });
@@ -407,7 +407,7 @@ router.post("/apps/:id/stop", requireAuth, async (req: Request, res: Response) =
 router.post("/apps/:id/restart", requireAuth, async (req: Request, res: Response) => {
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     restartApp(app.id).catch((err) => { req.log.error(err, "App restart failed"); });
     res.json({ message: "App restart initiated" });
@@ -420,7 +420,7 @@ router.post("/apps/:id/restart", requireAuth, async (req: Request, res: Response
 router.get("/apps/:id/logs", requireAuth, async (req: Request, res: Response) => {
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
 
     const limit = parseInt((req.query.limit as string) ?? "100", 10);
@@ -444,7 +444,7 @@ router.get("/apps/:id/logs", requireAuth, async (req: Request, res: Response) =>
 router.get("/apps/:id/logs/stream", requireAuth, async (req: Request, res: Response) => {
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
 
     res.setHeader("Content-Type", "text/event-stream");

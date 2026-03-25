@@ -113,7 +113,7 @@ router.get("/admin/users", requireAdmin, async (req, res) => {
 router.get("/admin/users/:id/apps", requireAdmin, async (req, res) => {
   try {
     await connectDb();
-    const userApps = await db.select().from(apps).where(eq(apps.ownerId, req.params.id)).orderBy(desc(apps.createdAt));
+    const userApps = await db.select().from(apps).where(eq(apps.ownerId, String(req.params.id))).orderBy(desc(apps.createdAt));
     res.json(userApps.map((a) => ({
       id: a.id, name: a.name, slug: a.slug, repoUrl: a.repoUrl,
       status: a.status, lastDeployedAt: a.lastDeployedAt, createdAt: a.createdAt,
@@ -131,7 +131,7 @@ router.patch("/admin/users/:id/status", requireAdmin, async (req, res) => {
     if (!["active", "suspended", "deactivated"].includes(status)) {
       res.status(400).json({ error: "Invalid status. Use: active, suspended, deactivated" }); return;
     }
-    const [user] = await db.update(users).set({ status, updatedAt: new Date() }).where(eq(users.id, req.params.id)).returning();
+    const [user] = await db.update(users).set({ status, updatedAt: new Date() }).where(eq(users.id, String(req.params.id))).returning();
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
     if (status === "suspended" || status === "deactivated") {
@@ -149,7 +149,7 @@ router.patch("/admin/users/:id/status", requireAdmin, async (req, res) => {
 router.delete("/admin/users/:id", requireAdmin, async (req, res) => {
   try {
     await connectDb();
-    const [user] = await db.select().from(users).where(eq(users.id, req.params.id)).limit(1);
+    const [user] = await db.select().from(users).where(eq(users.id, String(req.params.id))).limit(1);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
     const userApps = await db.select().from(apps).where(eq(apps.ownerId, user.id));
@@ -188,7 +188,7 @@ router.get("/admin/password-requests", requireAdmin, async (req, res) => {
 router.patch("/admin/password-requests/:id/resolve", requireAdmin, async (req, res) => {
   try {
     await connectDb();
-    const [request] = await db.select().from(passwordResetRequests).where(eq(passwordResetRequests.id, req.params.id)).limit(1);
+    const [request] = await db.select().from(passwordResetRequests).where(eq(passwordResetRequests.id, String(req.params.id))).limit(1);
     if (!request) { res.status(404).json({ error: "Request not found" }); return; }
     if (request.status !== "pending") { res.status(400).json({ error: "Request already resolved" }); return; }
 
@@ -208,7 +208,7 @@ router.patch("/admin/password-requests/:id/resolve", requireAdmin, async (req, r
 router.patch("/admin/password-requests/:id/reject", requireAdmin, async (req, res) => {
   try {
     await connectDb();
-    const [request] = await db.select().from(passwordResetRequests).where(eq(passwordResetRequests.id, req.params.id)).limit(1);
+    const [request] = await db.select().from(passwordResetRequests).where(eq(passwordResetRequests.id, String(req.params.id))).limit(1);
     if (!request) { res.status(404).json({ error: "Request not found" }); return; }
     await db.update(passwordResetRequests).set({ status: "rejected", updatedAt: new Date() }).where(eq(passwordResetRequests.id, request.id));
     res.json({ message: "Request rejected" });
@@ -243,7 +243,7 @@ router.get("/admin/apps", requireAdmin, async (req, res) => {
 router.post("/admin/users/:id/apps", requireAdmin, async (req, res) => {
   try {
     await connectDb();
-    const [user] = await db.select().from(users).where(eq(users.id, req.params.id)).limit(1);
+    const [user] = await db.select().from(users).where(eq(users.id, String(req.params.id))).limit(1);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
     const { name, repoUrl, startCommand, installCommand, port, autoRestart } = req.body as {
@@ -270,7 +270,7 @@ router.post("/admin/users/:id/apps", requireAdmin, async (req, res) => {
 router.post("/admin/users/:id/subscription", requireAdmin, async (req, res) => {
   try {
     await connectDb();
-    const [user] = await db.select().from(users).where(eq(users.id, req.params.id)).limit(1);
+    const [user] = await db.select().from(users).where(eq(users.id, String(req.params.id))).limit(1);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
     const now = new Date();
@@ -299,7 +299,7 @@ router.post("/admin/users/:id/subscription", requireAdmin, async (req, res) => {
 router.delete("/admin/users/:id/subscription", requireAdmin, async (req, res) => {
   try {
     await connectDb();
-    const [user] = await db.select().from(users).where(eq(users.id, req.params.id)).limit(1);
+    const [user] = await db.select().from(users).where(eq(users.id, String(req.params.id))).limit(1);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
     await db.update(subscriptions)
       .set({ status: "cancelled", updatedAt: new Date() })
@@ -365,7 +365,7 @@ router.post("/admin/my-apps", requireAdmin, async (req, res) => {
 router.get("/admin/my-apps/:id", requireAdmin, async (req, res) => {
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     res.json(toAdminAppJson(app));
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
@@ -374,7 +374,7 @@ router.get("/admin/my-apps/:id", requireAdmin, async (req, res) => {
 router.delete("/admin/my-apps/:id", requireAdmin, async (req, res) => {
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     await stopApp(app.id);
     await db.delete(logs).where(eq(logs.appId, app.id));
@@ -386,7 +386,7 @@ router.delete("/admin/my-apps/:id", requireAdmin, async (req, res) => {
 router.post("/admin/my-apps/:id/start", requireAdmin, async (req, res) => {
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     startApp(app.id).catch(() => {});
     res.json({ message: "Start initiated" });
@@ -396,7 +396,7 @@ router.post("/admin/my-apps/:id/start", requireAdmin, async (req, res) => {
 router.post("/admin/my-apps/:id/stop", requireAdmin, async (req, res) => {
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     await stopApp(app.id);
     res.json({ message: "App stopped" });
@@ -406,7 +406,7 @@ router.post("/admin/my-apps/:id/stop", requireAdmin, async (req, res) => {
 router.post("/admin/my-apps/:id/restart", requireAdmin, async (req, res) => {
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     restartApp(app.id).catch(() => {});
     res.json({ message: "Restart initiated" });
@@ -422,7 +422,7 @@ router.get("/admin/my-apps/:id/logs/stream", async (req, res) => {
 
   try {
     await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
 
     res.setHeader("Content-Type", "text/event-stream");
@@ -458,7 +458,7 @@ router.patch("/admin/apps/:id/action", requireAdmin, async (req, res) => {
   try {
     await connectDb();
     const { action } = req.body as { action: "stop" | "start" };
-    const [app] = await db.select().from(apps).where(eq(apps.id, req.params.id)).limit(1);
+    const [app] = await db.select().from(apps).where(eq(apps.id, String(req.params.id))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     if (action === "stop") await stopApp(app.id);
     const [updated] = await db.select().from(apps).where(eq(apps.id, app.id)).limit(1);
