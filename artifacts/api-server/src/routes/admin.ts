@@ -511,6 +511,38 @@ router.delete("/admin/my-apps/:id", requireAdmin, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
+router.put("/admin/my-apps/:id", requireAdmin, async (req, res) => {
+  try {
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+    const { name, branch, startCommand, installCommand, port, autoRestart, envVars } = req.body as {
+      name?: string; branch?: string; startCommand?: string; installCommand?: string;
+      port?: number | null; autoRestart?: boolean; envVars?: { key: string; value: string }[];
+    };
+    const update: Record<string, unknown> = { updatedAt: new Date() };
+    if (name !== undefined) update.name = name;
+    if (branch !== undefined) update.branch = branch;
+    if (startCommand !== undefined) update.startCommand = startCommand || null;
+    if (installCommand !== undefined) update.installCommand = installCommand || null;
+    if (port !== undefined) update.port = port ?? null;
+    if (autoRestart !== undefined) update.autoRestart = autoRestart;
+    if (envVars !== undefined) update.envVars = encryptEnvVars(envVars.filter((e) => e.key.trim()));
+    const [updated] = await db.update(apps).set(update as any).where(eq(apps.id, app.id)).returning();
+    res.json(toAdminAppJson(updated));
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+});
+
+router.post("/admin/my-apps/:id/redeploy", requireAdmin, async (req, res) => {
+  try {
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+    restartApp(app.id).catch(() => {});
+    res.json({ message: "Redeploy initiated" });
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+});
+
 router.post("/admin/my-apps/:id/start", requireAdmin, async (req, res) => {
   try {
     await connectDb();
