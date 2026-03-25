@@ -240,26 +240,108 @@ router.get("/admin/apps", requireAdmin, async (req, res) => {
   }
 });
 
+router.get("/admin/repo-meta", requireAdmin, async (req, res) => {
+  try {
+    const { repoUrl, pat, branch } = req.query as { repoUrl?: string; pat?: string; branch?: string };
+    if (!repoUrl) { res.status(400).json({ error: "repoUrl is required" }); return; }
+    const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/|$)/);
+    if (!match) { res.status(400).json({ error: "Invalid GitHub repository URL" }); return; }
+    const [, owner, repo] = match;
+    const headers: Record<string, string> = pat ? { Authorization: `token ${pat}` } : {};
+    const branchesToTry = branch ? [branch, "main", "master"].filter((v, i, a) => a.indexOf(v) === i) : ["main", "master"];
+    let pkgJson: Record<string, unknown> | null = null;
+    for (const b of branchesToTry) {
+      const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/package.json`, { headers });
+      if (resp.ok) { try { pkgJson = await resp.json() as Record<string, unknown>; } catch { pkgJson = null; } break; }
+    }
+    if (!pkgJson) { res.status(404).json({ error: "package.json not found in repository" }); return; }
+    const scripts = (pkgJson.scripts as Record<string, string> | undefined) ?? {};
+    let startCommand: string | null = scripts.start ?? scripts.serve ?? null;
+    if (!startCommand && typeof pkgJson.main === "string" && pkgJson.main) startCommand = `node ${pkgJson.main}`;
+    if (!startCommand) {
+      for (const b of branchesToTry) {
+        const pfResp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/Procfile`, { headers });
+        if (pfResp.ok) { const t = await pfResp.text(); const w = t.split("\n").find((l) => l.startsWith("web:")); if (w) startCommand = w.replace(/^web:\s*/, "").trim(); break; }
+      }
+    }
+    let installCommand = "npm install";
+    if (pkgJson.packageManager && typeof pkgJson.packageManager === "string") {
+      const pm = (pkgJson.packageManager as string).split("@")[0];
+      installCommand = `${pm} install`;
+    }
+    res.json({ startCommand, buildCommand: scripts.build ?? null, installCommand, scripts: Object.keys(scripts) });
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+});
+
+router.get("/admin/env-template", requireAdmin, async (req, res) => {
+  try {
+    const { repoUrl, pat, branch } = req.query as { repoUrl?: string; pat?: string; branch?: string };
+    if (!repoUrl) { res.status(400).json({ error: "repoUrl is required" }); return; }
+    const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/|$)/);
+    if (!match) { res.status(400).json({ error: "Invalid GitHub repository URL" }); return; }
+    const [, owner, repo] = match;
+    const headers: Record<string, string> = pat ? { Authorization: `token ${pat}` } : {};
+    const branchesToTry = branch ? [branch, "main", "master"].filter((v, i, a) => a.indexOf(v) === i) : ["main", "master"];
+
+    function parseEnvExample(content: string) {
+      const result: Array<{ key: string; defaultValue: string; comment: string | null; required: boolean }> = [];
+      let lastComment: string | null = null;
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) { lastComment = null; continue; }
+        if (trimmed.startsWith("#")) { lastComment = trimmed.slice(1).trim(); continue; }
+        const eqIdx = trimmed.indexOf("=");
+        if (eqIdx === -1) { lastComment = null; continue; }
+        const key = trimmed.slice(0, eqIdx).trim();
+        const rawValue = trimmed.slice(eqIdx + 1).trim();
+        const defaultValue = rawValue.replace(/^["']|["']$/g, "");
+        result.push({ key, defaultValue, comment: lastComment, required: defaultValue === "" });
+        lastComment = null;
+      }
+      return result;
+    }
+
+    for (const b of branchesToTry) {
+      const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/.env.example`, { headers });
+      if (resp.ok) { res.json({ keys: parseEnvExample(await resp.text()), source: ".env.example" }); return; }
+    }
+    res.status(404).json({ error: "No .env.example found in repository" });
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
+});
+
 router.post("/admin/users/:id/apps", requireAdmin, async (req, res) => {
   try {
     await connectDb();
     const [user] = await db.select().from(users).where(eq(users.id, String(req.params.id))).limit(1);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
-    const { name, repoUrl, startCommand, installCommand, port, autoRestart } = req.body as {
-      name: string; repoUrl: string; startCommand?: string; installCommand?: string; port?: number; autoRestart?: boolean;
+    const { name, repoUrl, branch, startCommand, installCommand, port, autoRestart, envVars } = req.body as {
+      name: string; repoUrl: string; branch?: string; startCommand?: string;
+      installCommand?: string; port?: number; autoRestart?: boolean;
+      envVars?: Array<{ key: string; value: string }>;
     };
     if (!name || !repoUrl) { res.status(400).json({ error: "name and repoUrl are required" }); return; }
 
-    const baseSlug = slugify(name, { lower: true, strict: true });
-    const existing = await db.select({ id: apps.id }).from(apps).where(and(eq(apps.ownerId, user.id), eq(apps.slug, baseSlug))).limit(1);
-    const slug = existing.length > 0 ? `${baseSlug}-${Date.now()}` : baseSlug;
+    let baseSlug = slugify(name, { lower: true, strict: true }) || "app";
+    let slug = baseSlug; let counter = 1;
+    while (true) {
+      const exists = await db.select({ id: apps.id }).from(apps).where(eq(apps.slug, slug)).limit(1);
+      if (exists.length === 0) break;
+      slug = `${baseSlug}-${counter++}`;
+    }
 
     const [app] = await db.insert(apps).values({
       ownerId: user.id, name, slug, repoUrl,
-      startCommand: startCommand ?? "", installCommand: installCommand ?? "",
-      port: port ?? 3000, autoRestart: autoRestart ?? true, status: "idle",
+      branch: branch ?? "main",
+      startCommand: startCommand ?? null,
+      installCommand: installCommand ?? null,
+      port: port ?? null,
+      autoRestart: autoRestart ?? false,
+      envVars: envVars ?? [],
+      status: "idle",
     }).returning();
+
+    startApp(app.id).catch(() => {});
     res.status(201).json({ id: app.id, name: app.name, slug: app.slug, status: app.status });
   } catch (err) {
     req.log.error(err);

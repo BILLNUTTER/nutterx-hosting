@@ -25,7 +25,7 @@ import {
   CheckCircle2, XCircle, RefreshCw, Trash2, ShieldOff, ShieldCheck,
   ShieldAlert, ChevronDown, ChevronRight, Rocket, CreditCard, Settings2,
   TrendingUp, Eye, EyeOff, Plus, AlertTriangle, Zap, Play, Square,
-  BookOpen, HelpCircle, Activity
+  BookOpen, HelpCircle, Activity, Wand2, Info, Github, ArrowRight, ArrowLeft, Package
 } from "lucide-react";
 import { getBaseUrl } from "@workspace/api-client-react";
 import { clsx } from "clsx";
@@ -116,24 +116,29 @@ export default function Admin() {
   type AdminLogLine = { line: string; stream: string; timestamp: string };
   const [adminApps, setAdminApps] = useState<AdminOwnApp[]>([]);
   const [isLoadingAdminApps, setIsLoadingAdminApps] = useState(false);
-  const [newAppName, setNewAppName] = useState("");
-  const [newAppRepo, setNewAppRepo] = useState("");
-  const [newAppBranch, setNewAppBranch] = useState("main");
-  const [newAppStart, setNewAppStart] = useState("");
-  const [newAppInstall, setNewAppInstall] = useState("");
-  const [isCreatingAdminApp, setIsCreatingAdminApp] = useState(false);
   const [selectedAdminAppId, setSelectedAdminAppId] = useState<string | null>(null);
   const [adminLogs, setAdminLogs] = useState<AdminLogLine[]>([]);
   const [adminAppAction, setAdminAppAction] = useState<string | null>(null);
   const adminLogEndRef = useRef<HTMLDivElement>(null);
   const adminEsRef = useRef<EventSource | null>(null);
 
-  // Deploy for user
-  const [deployUserId, setDeployUserId] = useState<string | null>(null);
-  const [deployName, setDeployName] = useState("");
-  const [deployRepo, setDeployRepo] = useState("");
-  const [deployStart, setDeployStart] = useState("");
-  const [isDeployingForUser, setIsDeployingForUser] = useState(false);
+  // Unified deploy wizard (used for both "for user" and "admin own apps")
+  type WizardTarget = { kind: "user"; userId: string; email: string } | { kind: "admin" };
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardTarget, setWizardTarget] = useState<WizardTarget | null>(null);
+  const [wizardStep, setWizardStep] = useState(1);
+  const [wName, setWName] = useState("");
+  const [wRepoUrl, setWRepoUrl] = useState("");
+  const [wBranch, setWBranch] = useState("main");
+  const [wPat, setWPat] = useState("");
+  const [wStartCmd, setWStartCmd] = useState("");
+  const [wInstallCmd, setWInstallCmd] = useState("");
+  const [wEnvVars, setWEnvVars] = useState<Array<{ key: string; value: string; comment?: string }>>([]);
+  const [wEnvFetchStatus, setWEnvFetchStatus] = useState<"idle" | "found" | "not_found" | "error">("idle");
+  const [wEnvFetchSource, setWEnvFetchSource] = useState("");
+  const [wIsFetchingMeta, setWIsFetchingMeta] = useState(false);
+  const [wIsFetchingEnv, setWIsFetchingEnv] = useState(false);
+  const [wIsDeploying, setWIsDeploying] = useState(false);
 
   // PesaPal settings
   const [settingsKey, setSettingsKey] = useState("");
@@ -282,26 +287,121 @@ export default function Admin() {
     } catch {} finally { setUserAppsLoading(null); }
   };
 
-  const handleDeployForUser = async () => {
-    if (!deployUserId || !deployName || !deployRepo) return;
-    setIsDeployingForUser(true);
+  const resetWizard = () => {
+    setWizardStep(1);
+    setWName(""); setWRepoUrl(""); setWBranch("main"); setWPat("");
+    setWStartCmd(""); setWInstallCmd("");
+    setWEnvVars([]); setWEnvFetchStatus("idle"); setWEnvFetchSource("");
+    setWIsFetchingMeta(false); setWIsFetchingEnv(false); setWIsDeploying(false);
+  };
+
+  const openWizardForUser = (userId: string, email: string) => {
+    resetWizard();
+    setWizardTarget({ kind: "user", userId, email });
+    setWizardOpen(true);
+  };
+
+  const openWizardForAdmin = () => {
+    resetWizard();
+    setWizardTarget({ kind: "admin" });
+    setWizardOpen(true);
+  };
+
+  const closeWizard = () => { setWizardOpen(false); setWizardTarget(null); resetWizard(); };
+
+  const wFetchMeta = async () => {
+    if (!wRepoUrl) return;
+    setWIsFetchingMeta(true);
     try {
-      const res = await adminFetch(`/api/admin/users/${deployUserId}/apps`, {
-        method: "POST",
-        body: JSON.stringify({ name: deployName, repoUrl: deployRepo, startCommand: deployStart }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error);
-      toast({ title: "App created", description: `${deployName} created for user.` });
-      setUserApps((prev) => {
-        const existing = prev[deployUserId] ?? [];
-        const data = { id: Date.now().toString(), name: deployName, slug: deployName.toLowerCase(), repoUrl: deployRepo, status: "idle" };
-        return { ...prev, [deployUserId]: [data, ...existing] };
-      });
-      setDeployUserId(null);
-      setDeployName(""); setDeployRepo(""); setDeployStart("");
+      const params = new URLSearchParams({ repoUrl: wRepoUrl, ...(wBranch && wBranch !== "main" ? { branch: wBranch } : {}), ...(wPat ? { pat: wPat } : {}) });
+      const res = await adminFetch(`/api/admin/repo-meta?${params}`);
+      if (res.ok) {
+        const meta = await res.json();
+        if (meta.startCommand && !wStartCmd) setWStartCmd(meta.startCommand);
+        if (meta.installCommand && !wInstallCmd) setWInstallCmd(meta.installCommand);
+        toast({ title: "Commands detected", description: "Install and start commands auto-filled from repo." });
+      } else {
+        toast({ title: "No package.json found", description: "Fill in commands manually.", variant: "destructive" });
+      }
+    } catch { toast({ title: "Auto-detect failed", variant: "destructive" }); }
+    finally { setWIsFetchingMeta(false); }
+  };
+
+  const wFetchEnv = async () => {
+    if (!wRepoUrl) return;
+    setWIsFetchingEnv(true);
+    setWEnvFetchStatus("idle");
+    try {
+      const params = new URLSearchParams({ repoUrl: wRepoUrl, ...(wBranch && wBranch !== "main" ? { branch: wBranch } : {}), ...(wPat ? { pat: wPat } : {}) });
+      const res = await adminFetch(`/api/admin/env-template?${params}`);
+      if (res.ok) {
+        const data = await res.json();
+        setWEnvVars((data.keys ?? []).map((k: any) => ({ key: k.key, value: k.defaultValue || "", comment: k.comment ?? undefined })));
+        setWEnvFetchSource(data.source ?? ".env.example");
+        setWEnvFetchStatus("found");
+      } else if (res.status === 404) {
+        setWEnvFetchStatus("not_found");
+        setWEnvVars([{ key: "", value: "" }]);
+      } else {
+        setWEnvFetchStatus("error");
+        setWEnvVars([{ key: "", value: "" }]);
+      }
+    } catch { setWEnvFetchStatus("error"); setWEnvVars([{ key: "", value: "" }]); }
+    finally { setWIsFetchingEnv(false); }
+  };
+
+  const handleWizardNext = async () => {
+    if (wizardStep === 1) {
+      if (!wName || !wRepoUrl) { toast({ title: "Name and Repo URL are required", variant: "destructive" }); return; }
+      setWizardStep(2);
+      wFetchEnv();
+      if (!wStartCmd && !wInstallCmd) wFetchMeta();
+    } else if (wizardStep === 2) {
+      setWizardStep(3);
+    }
+  };
+
+  const handleWizardDeploy = async () => {
+    if (!wizardTarget) return;
+    setWIsDeploying(true);
+    const validEnvVars = wEnvVars.filter((e) => e.key.trim());
+    try {
+      if (wizardTarget.kind === "user") {
+        const res = await adminFetch(`/api/admin/users/${wizardTarget.userId}/apps`, {
+          method: "POST",
+          body: JSON.stringify({
+            name: wName, repoUrl: wRepoUrl, branch: wBranch || "main",
+            startCommand: wStartCmd || undefined, installCommand: wInstallCmd || undefined,
+            envVars: validEnvVars, autoRestart: false,
+          }),
+        });
+        if (!res.ok) throw new Error((await res.json()).error);
+        const app = await res.json();
+        setUserApps((prev) => {
+          const uid = wizardTarget.userId;
+          return { ...prev, [uid]: [{ id: app.id, name: wName, slug: app.slug, repoUrl: wRepoUrl, status: "installing" }, ...(prev[uid] ?? [])] };
+        });
+        toast({ title: "App deployed", description: `${wName} is being deployed for ${wizardTarget.email}.` });
+      } else {
+        const res = await adminFetch("/api/admin/my-apps", {
+          method: "POST",
+          body: JSON.stringify({
+            name: wName, repoUrl: wRepoUrl, branch: wBranch || "main",
+            startCommand: wStartCmd || undefined, installCommand: wInstallCmd || undefined,
+            envVars: validEnvVars,
+          }),
+        });
+        if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
+        const app = await res.json();
+        setAdminApps((prev) => [app, ...prev]);
+        setSelectedAdminAppId(app.id);
+        openAdminLogs(app.id);
+        toast({ title: "App deploying", description: `${wName} is being cloned and started.` });
+      }
+      closeWizard();
     } catch (err: any) {
-      toast({ title: "Failed", description: err.message, variant: "destructive" });
-    } finally { setIsDeployingForUser(false); }
+      toast({ title: "Deployment failed", description: err.message, variant: "destructive" });
+    } finally { setWIsDeploying(false); }
   };
 
   const handleGrantSubscription = async (userId: string, email: string) => {
@@ -338,24 +438,6 @@ export default function Admin() {
     } catch {} finally { setIsLoadingAdminApps(false); }
   }, []);
 
-  const handleCreateAdminApp = async () => {
-    if (!newAppName || !newAppRepo) return;
-    setIsCreatingAdminApp(true);
-    try {
-      const res = await adminFetch("/api/admin/my-apps", {
-        method: "POST",
-        body: JSON.stringify({ name: newAppName, repoUrl: newAppRepo, branch: newAppBranch || "main", startCommand: newAppStart, installCommand: newAppInstall }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
-      const app = await res.json();
-      setAdminApps((prev) => [app, ...prev]);
-      setNewAppName(""); setNewAppRepo(""); setNewAppBranch("main"); setNewAppStart(""); setNewAppInstall("");
-      setSelectedAdminAppId(app.id);
-      toast({ title: "App created", description: `${app.name} is deploying...` });
-    } catch (err: any) {
-      toast({ title: "Failed", description: err.message, variant: "destructive" });
-    } finally { setIsCreatingAdminApp(false); }
-  };
 
   const handleAdminAppAction = async (id: string, action: "start" | "stop" | "restart") => {
     setAdminAppAction(id + action);
@@ -684,7 +766,7 @@ export default function Admin() {
                                   size="sm"
                                   variant="outline"
                                   className="h-7 text-xs gap-1.5"
-                                  onClick={() => { setDeployUserId(user.id); setDeployName(""); setDeployRepo(""); setDeployStart(""); }}
+                                  onClick={() => openWizardForUser(user.id, user.email)}
                                 >
                                   <Plus className="w-3.5 h-3.5" /> Deploy App for User
                                 </Button>
@@ -849,53 +931,10 @@ export default function Admin() {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Left column: app list + create form */}
               <div className="space-y-4">
-                {/* Create new app */}
-                <Card className="p-4 space-y-3">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Rocket className="w-4 h-4 text-primary" />
-                    <h3 className="font-semibold text-sm">Deploy New App</h3>
-                  </div>
-                  <div className="space-y-2">
-                    <Input
-                      placeholder="App name"
-                      value={newAppName}
-                      onChange={(e) => setNewAppName(e.target.value)}
-                      className="text-sm"
-                    />
-                    <Input
-                      placeholder="GitHub repo URL"
-                      value={newAppRepo}
-                      onChange={(e) => setNewAppRepo(e.target.value)}
-                      className="text-sm font-mono"
-                    />
-                    <Input
-                      placeholder="Branch (default: main)"
-                      value={newAppBranch}
-                      onChange={(e) => setNewAppBranch(e.target.value)}
-                      className="text-sm"
-                    />
-                    <Input
-                      placeholder="Start command (optional)"
-                      value={newAppStart}
-                      onChange={(e) => setNewAppStart(e.target.value)}
-                      className="text-sm font-mono"
-                    />
-                    <Input
-                      placeholder="Install command (optional)"
-                      value={newAppInstall}
-                      onChange={(e) => setNewAppInstall(e.target.value)}
-                      className="text-sm font-mono"
-                    />
-                  </div>
-                  <Button
-                    className="w-full gap-2"
-                    disabled={!newAppName || !newAppRepo || isCreatingAdminApp}
-                    onClick={handleCreateAdminApp}
-                  >
-                    {isCreatingAdminApp ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                    Deploy App
-                  </Button>
-                </Card>
+                {/* New App button */}
+                <Button className="w-full gap-2" onClick={openWizardForAdmin}>
+                  <Plus className="w-4 h-4" /> Deploy New App
+                </Button>
 
                 {/* App list */}
                 <Card className="p-0 overflow-hidden">
@@ -1186,33 +1225,197 @@ export default function Admin() {
         </DialogContent>
       </Dialog>
 
-      {/* Deploy for user dialog */}
-      <Dialog open={!!deployUserId} onOpenChange={(open) => !open && setDeployUserId(null)}>
-        <DialogContent>
+      {/* ─── Deploy Wizard ─── */}
+      <Dialog open={wizardOpen} onOpenChange={(open) => !open && closeWizard()}>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Deploy App for User</DialogTitle>
-            <DialogDescription>Create and register a new app for this user.</DialogDescription>
+            <div className="flex items-center gap-2">
+              <Wand2 className="w-5 h-5 text-primary" />
+              <DialogTitle>
+                {wizardTarget?.kind === "user"
+                  ? `Deploy for ${wizardTarget.email}`
+                  : "Deploy New App"}
+              </DialogTitle>
+            </div>
+            <DialogDescription>
+              {wizardStep === 1 && "Configure the repository and runtime commands."}
+              {wizardStep === 2 && "Set environment variables for this deployment."}
+              {wizardStep === 3 && "Review and confirm your deployment."}
+            </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div className="space-y-1.5">
-              <Label>App Name</Label>
-              <Input value={deployName} onChange={(e) => setDeployName(e.target.value)} placeholder="my-bot" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>GitHub Repo URL</Label>
-              <Input value={deployRepo} onChange={(e) => setDeployRepo(e.target.value)} placeholder="https://github.com/user/repo" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Start Command (optional)</Label>
-              <Input value={deployStart} onChange={(e) => setDeployStart(e.target.value)} placeholder="node index.js" />
-            </div>
+
+          {/* Step indicator */}
+          <div className="flex gap-2 text-xs text-muted-foreground mb-1">
+            {[1, 2, 3].map((s) => (
+              <div key={s} className={clsx("flex items-center gap-1", s === wizardStep ? "text-primary font-semibold" : s < wizardStep ? "text-green-500" : "")}>
+                {s < wizardStep ? <CheckCircle2 className="w-3.5 h-3.5" /> : <span className="w-4 h-4 rounded-full border flex items-center justify-center text-[10px]">{s}</span>}
+                {s === 1 ? "Repo" : s === 2 ? "Env Vars" : "Review"}
+                {s < 3 && <span className="ml-1 text-muted-foreground/40">›</span>}
+              </div>
+            ))}
           </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setDeployUserId(null)}>Cancel</Button>
-            <Button onClick={handleDeployForUser} disabled={!deployName || !deployRepo || isDeployingForUser}>
-              {isDeployingForUser ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Rocket className="w-4 h-4 mr-1" />}
-              Create App
-            </Button>
+
+          {/* Step 1: Repo config */}
+          {wizardStep === 1 && (
+            <div className="space-y-3 py-1">
+              <div className="space-y-1.5">
+                <Label>App Name *</Label>
+                <Input value={wName} onChange={(e) => setWName(e.target.value)} placeholder="my-discord-bot" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="flex items-center gap-1"><Github className="w-3.5 h-3.5" /> GitHub Repo URL *</Label>
+                <Input value={wRepoUrl} onChange={(e) => setWRepoUrl(e.target.value)} placeholder="https://github.com/user/repo" className="font-mono text-sm" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1.5">
+                  <Label>Branch</Label>
+                  <Input value={wBranch} onChange={(e) => setWBranch(e.target.value)} placeholder="main" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="flex items-center gap-1">PAT <span className="text-muted-foreground text-[10px]">(private repos)</span></Label>
+                  <Input value={wPat} onChange={(e) => setWPat(e.target.value)} type="password" placeholder="ghp_..." className="font-mono text-sm" />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label className="flex items-center gap-1"><Package className="w-3.5 h-3.5" /> Install Command</Label>
+                  <Button size="sm" variant="ghost" className="h-6 text-[11px] gap-1 px-2" onClick={wFetchMeta} disabled={!wRepoUrl || wIsFetchingMeta}>
+                    {wIsFetchingMeta ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />} Auto-detect
+                  </Button>
+                </div>
+                <Input value={wInstallCmd} onChange={(e) => setWInstallCmd(e.target.value)} placeholder="npm install" className="font-mono text-sm" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="flex items-center gap-1"><Play className="w-3.5 h-3.5" /> Start Command</Label>
+                <Input value={wStartCmd} onChange={(e) => setWStartCmd(e.target.value)} placeholder="node index.js" className="font-mono text-sm" />
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: Env Vars */}
+          {wizardStep === 2 && (
+            <div className="space-y-3 py-1">
+              {wIsFetchingEnv ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground py-4 justify-center">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Scanning {wRepoUrl.split("/").slice(-1)[0]} for .env files…
+                </div>
+              ) : (
+                <>
+                  {wEnvFetchStatus === "found" && (
+                    <div className="flex items-center gap-2 text-xs text-green-500 bg-green-500/10 rounded-md px-3 py-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                      Found {wEnvVars.length} variable{wEnvVars.length !== 1 ? "s" : ""} from <code className="ml-1">{wEnvFetchSource}</code>
+                    </div>
+                  )}
+                  {wEnvFetchStatus === "not_found" && (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-md px-3 py-1.5">
+                      <Info className="w-3.5 h-3.5 flex-shrink-0" /> No .env.example found — add variables manually below.
+                    </div>
+                  )}
+                  <div className="max-h-52 overflow-y-auto space-y-2 pr-1">
+                    {wEnvVars.map((ev, i) => (
+                      <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                        <Input
+                          value={ev.key}
+                          onChange={(e) => setWEnvVars((prev) => prev.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
+                          placeholder="KEY"
+                          className="font-mono text-xs h-8"
+                          title={ev.comment}
+                        />
+                        <Input
+                          value={ev.value}
+                          onChange={(e) => setWEnvVars((prev) => prev.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
+                          placeholder="value"
+                          className="font-mono text-xs h-8"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          onClick={() => setWEnvVars((prev) => prev.filter((_, j) => j !== i))}
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1 text-xs h-7"
+                    onClick={() => setWEnvVars((prev) => [...prev, { key: "", value: "" }])}
+                  >
+                    <Plus className="w-3 h-3" /> Add Variable
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Step 3: Review */}
+          {wizardStep === 3 && (
+            <div className="space-y-3 py-1 text-sm">
+              <div className="rounded-md border border-border overflow-hidden divide-y divide-border">
+                <div className="grid grid-cols-[120px_1fr] px-3 py-2 bg-muted/30">
+                  <span className="text-muted-foreground text-xs font-medium">App Name</span>
+                  <span className="font-semibold">{wName}</span>
+                </div>
+                <div className="grid grid-cols-[120px_1fr] px-3 py-2">
+                  <span className="text-muted-foreground text-xs font-medium">Repository</span>
+                  <span className="font-mono text-xs break-all">{wRepoUrl}</span>
+                </div>
+                <div className="grid grid-cols-[120px_1fr] px-3 py-2 bg-muted/30">
+                  <span className="text-muted-foreground text-xs font-medium">Branch</span>
+                  <span className="font-mono text-xs">{wBranch || "main"}</span>
+                </div>
+                {wInstallCmd && (
+                  <div className="grid grid-cols-[120px_1fr] px-3 py-2">
+                    <span className="text-muted-foreground text-xs font-medium">Install</span>
+                    <span className="font-mono text-xs">{wInstallCmd}</span>
+                  </div>
+                )}
+                {wStartCmd && (
+                  <div className="grid grid-cols-[120px_1fr] px-3 py-2 bg-muted/30">
+                    <span className="text-muted-foreground text-xs font-medium">Start</span>
+                    <span className="font-mono text-xs">{wStartCmd}</span>
+                  </div>
+                )}
+                <div className="grid grid-cols-[120px_1fr] px-3 py-2">
+                  <span className="text-muted-foreground text-xs font-medium">Env Vars</span>
+                  <span>{wEnvVars.filter((e) => e.key.trim()).length} variable{wEnvVars.filter((e) => e.key.trim()).length !== 1 ? "s" : ""}</span>
+                </div>
+                {wizardTarget?.kind === "user" && (
+                  <div className="grid grid-cols-[120px_1fr] px-3 py-2 bg-muted/30">
+                    <span className="text-muted-foreground text-xs font-medium">Owner</span>
+                    <span>{wizardTarget.email}</span>
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                <Info className="w-3.5 h-3.5 flex-shrink-0" />
+                The repo will be cloned and the app started automatically after creation.
+              </p>
+            </div>
+          )}
+
+          <DialogFooter className="flex items-center gap-2">
+            <Button variant="ghost" onClick={closeWizard} className="mr-auto">Cancel</Button>
+            {wizardStep > 1 && (
+              <Button variant="outline" onClick={() => setWizardStep((s) => s - 1)} className="gap-1" disabled={wIsDeploying}>
+                <ArrowLeft className="w-3.5 h-3.5" /> Back
+              </Button>
+            )}
+            {wizardStep < 3 ? (
+              <Button onClick={handleWizardNext} className="gap-1" disabled={wIsFetchingEnv}>
+                {wIsFetchingEnv ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                Next <ArrowRight className="w-3.5 h-3.5" />
+              </Button>
+            ) : (
+              <Button onClick={handleWizardDeploy} className="gap-1" disabled={wIsDeploying}>
+                {wIsDeploying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+                {wIsDeploying ? "Deploying…" : "Deploy App"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
