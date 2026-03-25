@@ -145,6 +145,7 @@ export default function NewApp() {
     }
     setIsDeploying(true);
     try {
+      const validEnvVars = envVars.filter((e) => e.key.trim());
       const app = await createApp({
         data: {
           name: name.trim(),
@@ -152,20 +153,9 @@ export default function NewApp() {
           autoRestart,
           startCommand: startCommand || undefined,
           installCommand: installCommand || undefined,
+          envVars: validEnvVars.length > 0 ? validEnvVars : undefined,
         } as any,
       });
-
-      const validEnvVars = envVars.filter((e) => e.key.trim());
-      if (validEnvVars.length > 0) {
-        await fetch(`/api/apps/${app.id}/env`, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${getToken()}`,
-          },
-          body: JSON.stringify({ envVars: validEnvVars }),
-        });
-      }
 
       await fetch(`/api/apps/${app.id}/start`, {
         method: "POST",

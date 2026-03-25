@@ -273,9 +273,10 @@ function parseEnvExample(content: string) {
 router.post("/apps", requireAuth, async (req: Request, res: Response) => {
   try {
     await connectDb();
-    const { name, repoUrl, branch, pat, autoRestart, startCommand, installCommand, port } = req.body as {
+    const { name, repoUrl, branch, pat, autoRestart, startCommand, installCommand, port, envVars } = req.body as {
       name: string; repoUrl: string; branch?: string; pat?: string;
       autoRestart?: boolean; startCommand?: string; installCommand?: string; port?: number;
+      envVars?: Array<{ key: string; value: string }>;
     };
 
     if (!name || !repoUrl) {
@@ -296,6 +297,7 @@ router.post("/apps", requireAuth, async (req: Request, res: Response) => {
       startCommand: startCommand ?? null,
       installCommand: installCommand ?? null,
       port: port ?? null,
+      envVars: encryptEnvVars(Array.isArray(envVars) ? envVars.filter(e => e.key?.trim()) : []),
       status: "idle",
     }).returning();
 
