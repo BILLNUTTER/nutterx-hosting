@@ -241,23 +241,28 @@ export async function startApp(appId: string): Promise<void> {
       (hasPackageLock && !hasNodeModules) ? "npm ci" : "npm install"
     );
 
-    if (/^\s*npm\s+ci(\s|$)/.test(installCmd)) {
-      if (!/--ignore-scripts/.test(installCmd))  installCmd += " --ignore-scripts";
-      if (!/--no-audit/.test(installCmd))        installCmd += " --no-audit";
-      if (!/--no-fund/.test(installCmd))         installCmd += " --no-fund";
-    } else if (/^\s*npm(\s|$)/.test(installCmd)) {
+    // npm/pnpm/yarn flags — always skip native compilation first (--ignore-scripts).
+    // Native builds (node-gyp, canvas, sharp, etc.) are the #1 cause of slow/failing
+    // installs. Almost all bots (WhatsApp, Telegram) have pure-JS fallbacks and don't
+    // need compiled modules. We only retry WITH scripts if the fast path fails.
+    const isNpm  = /^\s*npm(\s|$)/.test(installCmd);
+    const isNpmCi = /^\s*npm\s+ci(\s|$)/.test(installCmd);
+    const isPnpm = /^\s*pnpm(\s|$)/.test(installCmd);
+    const isYarn = /^\s*yarn(\s|$)/.test(installCmd);
+
+    if (isNpmCi || isNpm) {
+      if (!/--ignore-scripts/.test(installCmd))    installCmd += " --ignore-scripts";
       if (!/--ignore-platform/.test(installCmd))   installCmd += " --ignore-platform";
       if (!/--no-audit/.test(installCmd))          installCmd += " --no-audit";
       if (!/--no-fund/.test(installCmd))           installCmd += " --no-fund";
-      if (!/--prefer-offline/.test(installCmd))    installCmd += " --prefer-offline";
-      if (!/--legacy-peer-deps/.test(installCmd))  installCmd += " --legacy-peer-deps";
-    } else if (/^\s*pnpm(\s|$)/.test(installCmd)) {
-      if (!/--ignore-platform/.test(installCmd))  installCmd += " --ignore-platform";
+      if (!isNpmCi && !/--legacy-peer-deps/.test(installCmd)) installCmd += " --legacy-peer-deps";
+    } else if (isPnpm) {
+      if (!/--ignore-scripts/.test(installCmd))    installCmd += " --ignore-scripts";
+      if (!/--ignore-platform/.test(installCmd))   installCmd += " --ignore-platform";
       if (hasPnpmLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
-      if (!hasPnpmLock && !/--prefer-offline/.test(installCmd)) installCmd += " --prefer-offline";
-    } else if (/^\s*yarn(\s|$)/.test(installCmd)) {
+    } else if (isYarn) {
+      if (!/--ignore-scripts/.test(installCmd))    installCmd += " --ignore-scripts";
       if (hasYarnLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
-      if (!hasYarnLock && !/--prefer-offline/.test(installCmd)) installCmd += " --prefer-offline";
     }
 
     // Shared npm/pnpm/yarn cache directory — persists across ALL app deploys so
@@ -272,8 +277,7 @@ export async function startApp(appId: string): Promise<void> {
       PNPM_IGNORE_PLATFORM: "true",
       npm_config_audit: "false",
       npm_config_fund: "false",
-      npm_config_prefer_offline: "true",
-      // Point all package managers to the shared cache
+      // Shared cache for all package managers
       npm_config_cache: npmCacheDir,
       YARN_CACHE_FOLDER: path.join(npmCacheDir, "yarn"),
       PNPM_STORE_DIR: path.join(npmCacheDir, "pnpm-store"),
@@ -281,17 +285,23 @@ export async function startApp(appId: string): Promise<void> {
       ...(NPM_GLOBAL_BIN ? { PATH: `${NPM_GLOBAL_BIN}:${process.env.PATH ?? ""}` } : {}),
     };
 
+    // Install timeout: 20 min. Heavy bots (baileys + 500 deps) need breathing room
+    // on cold installs. Subsequent deploys hit the cache and finish in <1 min.
+    const INSTALL_TIMEOUT = 20 * 60_000;
+
     const [installBin, ...installArgs] = installCmd.split(" ");
     writeLog(appId, `Installing dependencies with: ${installCmd}`, "system");
     try {
-      await runCommand(installBin, installArgs, appDir, appId, installEnv);
+      await runCommand(installBin, installArgs, appDir, appId, installEnv, INSTALL_TIMEOUT);
+      writeLog(appId, `Dependencies installed (postinstall scripts skipped — using JS fallbacks).`, "system");
     } catch (installErr) {
       const errMsg = installErr instanceof Error ? installErr.message : String(installErr);
-      writeLog(appId, `Dependency install failed: ${errMsg}`, "stderr");
-      writeLog(appId, `Retrying without native module compilation (--ignore-scripts)...`, "system");
-      const fallbackArgs = [...installArgs, "--ignore-scripts"];
-      await runCommand(installBin, fallbackArgs, appDir, appId, installEnv);
-      writeLog(appId, `Dependencies installed without native modules. Some features may use JS fallbacks.`, "system");
+      writeLog(appId, `Fast install failed: ${errMsg}`, "stderr");
+      writeLog(appId, `Retrying with full native module compilation (this may take a few minutes)...`, "system");
+      // Retry WITH scripts — some packages genuinely need postinstall
+      const fullArgs = installArgs.filter(a => a !== "--ignore-scripts");
+      await runCommand(installBin, fullArgs, appDir, appId, installEnv, INSTALL_TIMEOUT);
+      writeLog(appId, `Dependencies installed with native module compilation.`, "system");
     }
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
