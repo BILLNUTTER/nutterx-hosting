@@ -225,48 +225,35 @@ export async function startApp(appId: string): Promise<void> {
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
     const pm = detectPackageManager(appDir);
-    const hasPackageLock   = existsSync(path.join(appDir, "package-lock.json"));
-    const hasPnpmLock      = existsSync(path.join(appDir, "pnpm-lock.yaml"));
-    const hasYarnLock      = existsSync(path.join(appDir, "yarn.lock"));
-    // If node_modules already exists (cached from a previous deploy), avoid npm ci
-    // which would wipe and re-download everything. Use npm install instead so only
-    // changed packages are fetched, then prune removed ones.
-    const hasNodeModules   = existsSync(path.join(appDir, "node_modules"));
+    const hasPackageLock = existsSync(path.join(appDir, "package-lock.json"));
+    const hasPnpmLock    = existsSync(path.join(appDir, "pnpm-lock.yaml"));
+    const hasYarnLock    = existsSync(path.join(appDir, "yarn.lock"));
+    // Keep node_modules from previous deploy — only fetch what changed
+    const hasNodeModules = existsSync(path.join(appDir, "node_modules"));
 
-    // Default: use ci/frozen-lockfile variant when lockfile is present (much faster)
+    // Pick the right install command; never use npm ci when node_modules is cached
+    // because npm ci deletes them first, defeating the whole point of caching.
     let installCmd = app.installCommand || (
       pm === "pnpm" ? "pnpm install" :
       pm === "yarn" ? "yarn install"  :
-      // Never use npm ci when node_modules is cached — it deletes them first
       (hasPackageLock && !hasNodeModules) ? "npm ci" : "npm install"
     );
 
-    // npm/pnpm/yarn flags — always skip native compilation first (--ignore-scripts).
-    // Native builds (node-gyp, canvas, sharp, etc.) are the #1 cause of slow/failing
-    // installs. Almost all bots (WhatsApp, Telegram) have pure-JS fallbacks and don't
-    // need compiled modules. We only retry WITH scripts if the fast path fails.
-    const isNpm  = /^\s*npm(\s|$)/.test(installCmd);
-    const isNpmCi = /^\s*npm\s+ci(\s|$)/.test(installCmd);
-    const isPnpm = /^\s*pnpm(\s|$)/.test(installCmd);
-    const isYarn = /^\s*yarn(\s|$)/.test(installCmd);
-
-    if (isNpmCi || isNpm) {
-      if (!/--ignore-scripts/.test(installCmd))    installCmd += " --ignore-scripts";
+    // Append speed flags without overriding anything the user already set
+    if (/^\s*npm(\s|$)/.test(installCmd)) {
       if (!/--ignore-platform/.test(installCmd))   installCmd += " --ignore-platform";
       if (!/--no-audit/.test(installCmd))          installCmd += " --no-audit";
       if (!/--no-fund/.test(installCmd))           installCmd += " --no-fund";
-      if (!isNpmCi && !/--legacy-peer-deps/.test(installCmd)) installCmd += " --legacy-peer-deps";
-    } else if (isPnpm) {
-      if (!/--ignore-scripts/.test(installCmd))    installCmd += " --ignore-scripts";
+      if (!/--legacy-peer-deps/.test(installCmd))  installCmd += " --legacy-peer-deps";
+    } else if (/^\s*pnpm(\s|$)/.test(installCmd)) {
       if (!/--ignore-platform/.test(installCmd))   installCmd += " --ignore-platform";
       if (hasPnpmLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
-    } else if (isYarn) {
-      if (!/--ignore-scripts/.test(installCmd))    installCmd += " --ignore-scripts";
+    } else if (/^\s*yarn(\s|$)/.test(installCmd)) {
       if (hasYarnLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
     }
 
-    // Shared npm/pnpm/yarn cache directory — persists across ALL app deploys so
-    // packages only download once and subsequent installs use the local cache.
+    // Shared package cache — all apps share one download cache so packages are
+    // only fetched from the internet once; every subsequent install is local.
     const npmCacheDir = path.join(os.homedir(), ".nutterx-npm-cache");
     if (!existsSync(npmCacheDir)) mkdirSync(npmCacheDir, { recursive: true });
 
@@ -277,7 +264,6 @@ export async function startApp(appId: string): Promise<void> {
       PNPM_IGNORE_PLATFORM: "true",
       npm_config_audit: "false",
       npm_config_fund: "false",
-      // Shared cache for all package managers
       npm_config_cache: npmCacheDir,
       YARN_CACHE_FOLDER: path.join(npmCacheDir, "yarn"),
       PNPM_STORE_DIR: path.join(npmCacheDir, "pnpm-store"),
@@ -285,23 +271,21 @@ export async function startApp(appId: string): Promise<void> {
       ...(NPM_GLOBAL_BIN ? { PATH: `${NPM_GLOBAL_BIN}:${process.env.PATH ?? ""}` } : {}),
     };
 
-    // Install timeout: 20 min. Heavy bots (baileys + 500 deps) need breathing room
-    // on cold installs. Subsequent deploys hit the cache and finish in <1 min.
-    const INSTALL_TIMEOUT = 20 * 60_000;
+    // 15-minute install timeout; heavy bots (baileys 500+ deps) need the headroom.
+    // Subsequent deploys use cached node_modules and finish in well under a minute.
+    const INSTALL_TIMEOUT = 15 * 60_000;
 
     const [installBin, ...installArgs] = installCmd.split(" ");
     writeLog(appId, `Installing dependencies with: ${installCmd}`, "system");
     try {
       await runCommand(installBin, installArgs, appDir, appId, installEnv, INSTALL_TIMEOUT);
-      writeLog(appId, `Dependencies installed (postinstall scripts skipped — using JS fallbacks).`, "system");
     } catch (installErr) {
       const errMsg = installErr instanceof Error ? installErr.message : String(installErr);
-      writeLog(appId, `Fast install failed: ${errMsg}`, "stderr");
-      writeLog(appId, `Retrying with full native module compilation (this may take a few minutes)...`, "system");
-      // Retry WITH scripts — some packages genuinely need postinstall
-      const fullArgs = installArgs.filter(a => a !== "--ignore-scripts");
-      await runCommand(installBin, fullArgs, appDir, appId, installEnv, INSTALL_TIMEOUT);
-      writeLog(appId, `Dependencies installed with native module compilation.`, "system");
+      writeLog(appId, `Install failed: ${errMsg}`, "stderr");
+      writeLog(appId, `Retrying without postinstall scripts (--ignore-scripts)...`, "system");
+      const fallbackArgs = [...installArgs.filter(a => a !== "--ignore-scripts"), "--ignore-scripts"];
+      await runCommand(installBin, fallbackArgs, appDir, appId, installEnv, INSTALL_TIMEOUT);
+      writeLog(appId, `Dependencies installed (postinstall scripts skipped).`, "system");
     }
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
