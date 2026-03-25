@@ -675,7 +675,7 @@ router.post("/admin/settings/rawtest", requireAdmin, async (req, res) => {
   };
   const key = (consumerKey ?? "").trim();
   const secret = (consumerSecret ?? "").trim();
-  const prod = isProduction ?? false;
+  const prod = isProduction === true;
   const baseUrl = prod ? "https://pay.pesapal.com/v3" : "https://cybqa.pesapal.com/pesapalv3";
   const url = `${baseUrl}/api/Auth/RequestToken`;
   const payload = JSON.stringify({ consumer_key: key, consumer_secret: secret });
@@ -685,8 +685,18 @@ router.post("/admin/settings/rawtest", requireAdmin, async (req, res) => {
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: payload,
     });
-    const data = await resp.json();
-    res.json({ ok: resp.ok, status: resp.status, data });
+    const text = await resp.text();
+    let pesapalResponse: any = null;
+    try { pesapalResponse = JSON.parse(text); } catch { pesapalResponse = text; }
+    const gotToken = !!(pesapalResponse?.token);
+    res.json({
+      gotToken,
+      httpStatus: resp.status,
+      keyLength: key.length,
+      secretLength: secret.length,
+      requestPayload: payload,
+      pesapalResponse,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -696,10 +706,18 @@ router.get("/admin/settings", requireAdmin, async (req, res) => {
   try {
     await connectDb();
     const [settings] = await db.select().from(pesapalSettings).limit(1);
-    if (!settings) { res.json({ consumerKey: "", consumerSecret: "", ipnId: "", isProduction: false }); return; }
+    if (!settings) {
+      res.json({ consumerKey: "", consumerSecret: "", ipnId: "", isProduction: true, configured: false });
+      return;
+    }
     res.json({
-      id: settings.id, consumerKey: settings.consumerKey, consumerSecret: settings.consumerSecret,
-      ipnId: settings.ipnId, isProduction: settings.isProduction,
+      id: settings.id,
+      consumerKey: settings.consumerKey,
+      // Never send the actual secret to the browser — just signal it is set
+      consumerSecret: settings.consumerSecret ? "••••••••" : "",
+      ipnId: settings.ipnId,
+      isProduction: settings.isProduction,
+      configured: !!(settings.consumerKey && settings.consumerSecret),
     });
   } catch (err) {
     req.log.error(err);
@@ -713,22 +731,73 @@ router.put("/admin/settings", requireAdmin, async (req, res) => {
     const { consumerKey, consumerSecret, isProduction } = req.body as {
       consumerKey: string; consumerSecret: string; isProduction?: boolean;
     };
+    const trimKey    = (consumerKey ?? "").trim();
+    const trimSecret = (consumerSecret ?? "").trim();
+    const prod = isProduction === true;
+
     const [existing] = await db.select().from(pesapalSettings).limit(1);
     if (existing) {
+      // If the secret field was left blank, preserve the existing stored secret.
+      // The UI shows "Leave blank to keep existing" — this actually honours that.
+      const secretToSave = trimSecret || existing.consumerSecret;
       const [updated] = await db.update(pesapalSettings)
-        .set({ consumerKey: consumerKey.trim(), consumerSecret: consumerSecret.trim(), isProduction: isProduction ?? false, updatedAt: new Date() })
+        .set({ consumerKey: trimKey, consumerSecret: secretToSave, isProduction: prod, updatedAt: new Date() })
         .where(eq(pesapalSettings.id, existing.id))
         .returning();
-      res.json({ id: updated.id, consumerKey: updated.consumerKey, isProduction: updated.isProduction });
+      res.json({ id: updated.id, consumerKey: updated.consumerKey, isProduction: updated.isProduction, configured: true });
     } else {
+      if (!trimKey || !trimSecret) {
+        res.status(400).json({ error: "Consumer Key and Consumer Secret are required for first-time setup." });
+        return;
+      }
       const [created] = await db.insert(pesapalSettings).values({
-        consumerKey: consumerKey.trim(), consumerSecret: consumerSecret.trim(), isProduction: isProduction ?? false,
+        consumerKey: trimKey, consumerSecret: trimSecret, isProduction: prod,
       }).returning();
-      res.json({ id: created.id, consumerKey: created.consumerKey, isProduction: created.isProduction });
+      res.json({ id: created.id, consumerKey: created.consumerKey, isProduction: created.isProduction, configured: true });
     }
   } catch (err) {
     req.log.error(err);
     const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+  }
+});
+
+// Test credentials that are already saved in the database (no need to re-enter the secret)
+router.get("/admin/settings/test", requireAdmin, async (req, res) => {
+  try {
+    await connectDb();
+    const [settings] = await db.select().from(pesapalSettings).limit(1);
+    if (!settings?.consumerKey || !settings?.consumerSecret) {
+      res.json({ ok: false, message: "No PesaPal credentials saved yet. Enter your Consumer Key and Secret above, then save." });
+      return;
+    }
+    const prod = settings.isProduction === true;
+    const baseUrl = prod ? "https://pay.pesapal.com/v3" : "https://cybqa.pesapal.com/pesapalv3";
+    const url = `${baseUrl}/api/Auth/RequestToken`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ consumer_key: settings.consumerKey, consumer_secret: settings.consumerSecret }),
+    });
+    const text = await resp.text();
+    let pesapalResponse: any = null;
+    try { pesapalResponse = JSON.parse(text); } catch { pesapalResponse = text; }
+    const gotToken = !!(pesapalResponse?.token);
+    res.json({
+      ok: gotToken,
+      message: gotToken
+        ? `Connection successful! Authenticated with PesaPal ${prod ? "Production" : "Sandbox"}.`
+        : `PesaPal rejected the saved credentials (${prod ? "Production" : "Sandbox"}): ${pesapalResponse?.error?.message ?? pesapalResponse?.message ?? JSON.stringify(pesapalResponse).slice(0, 200)}`,
+      debug: {
+        source: "Saved in database",
+        environment: prod ? "Production" : "Sandbox",
+        httpStatus: resp.status,
+        keyLength: settings.consumerKey.length,
+        secretLength: settings.consumerSecret.length,
+        pesapalResponse,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, message: err.message ?? "Test failed" });
   }
 });
 
