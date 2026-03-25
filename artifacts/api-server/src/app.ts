@@ -5,7 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
-import { connectMongo } from "@workspace/mongo";
+import { connectDb } from "@workspace/db";
 import { startSubscriptionCron } from "./services/subscriptionCron.js";
 import { recoverApps } from "./services/processManager.js";
 
@@ -50,13 +50,12 @@ if (process.env.NODE_ENV === "production") {
   });
 }
 
-connectMongo().then(() => {
-  logger.info("Connected to MongoDB");
+connectDb().then(() => {
+  logger.info("Connected to PostgreSQL");
   startSubscriptionCron();
-  // Re-deploy any apps that were running/installing when the server last restarted
   recoverApps().catch((err) => logger.error({ err }, "App recovery failed"));
 }).catch((err) => {
-  logger.error({ err }, "Failed to connect to MongoDB");
+  logger.error({ err }, "Failed to connect to PostgreSQL");
 });
 
 export default app;

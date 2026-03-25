@@ -1,22 +1,16 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import { eq, and, desc, gt, inArray, or, sql } from "drizzle-orm";
 import {
-  connectMongo,
-  User,
-  App,
-  Log,
-  PasswordResetRequest,
-  Payment,
-  Subscription,
-  PesapalSettings,
-} from "@workspace/mongo";
+  connectDb, db,
+  users, apps, logs, passwordResetRequests, payments, subscriptions, pesapalSettings,
+} from "@workspace/db";
+import type { App } from "@workspace/db";
 import slugify from "slugify";
-import mongoose from "mongoose";
 import { startApp, stopApp, restartApp, subscribeToLogs } from "../services/processManager.js";
 
-// All apps owned by the admin use this fixed synthetic ObjectId as their "owner"
-const ADMIN_OWNER_ID = new mongoose.Types.ObjectId("000000000000000000000001");
+const ADMIN_OWNER_ID = "00000000-0000-0000-0000-000000000001";
 
 const router: IRouter = Router();
 
@@ -32,55 +26,43 @@ function getJwtSecret(): string {
 function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
-  if (!token) {
-    res.status(401).json({ error: "Admin authentication required" });
-    return;
-  }
+  if (!token) { res.status(401).json({ error: "Admin authentication required" }); return; }
   try {
     const payload = jwt.verify(token, getJwtSecret()) as { role?: string };
-    if (payload.role !== "admin") {
-      res.status(403).json({ error: "Admin access required" });
-      return;
-    }
+    if (payload.role !== "admin") { res.status(403).json({ error: "Admin access required" }); return; }
     next();
   } catch {
     res.status(401).json({ error: "Invalid or expired admin token" });
   }
 }
 
-// POST /api/admin/login
 router.post("/admin/login", (req, res) => {
   const { username, key } = req.body as { username: string; key: string };
-  if (!username || !key) {
-    res.status(400).json({ error: "Username and key are required" });
-    return;
-  }
-  if (username !== ADMIN_USERNAME || key !== ADMIN_KEY) {
-    res.status(401).json({ error: "Invalid admin credentials" });
-    return;
-  }
+  if (!username || !key) { res.status(400).json({ error: "Username and key are required" }); return; }
+  if (username !== ADMIN_USERNAME || key !== ADMIN_KEY) { res.status(401).json({ error: "Invalid admin credentials" }); return; }
   const token = jwt.sign({ role: "admin", adminId: username }, getJwtSecret(), { expiresIn: "8h" });
   res.json({ adminToken: token });
 });
 
-// GET /api/admin/stats
 router.get("/admin/stats", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const [totalUsers, totalApps, pendingResets, totalRevenue] = await Promise.all([
-      User.countDocuments(),
-      App.countDocuments(),
-      PasswordResetRequest.countDocuments({ status: "pending" }),
-      Payment.aggregate([
-        { $match: { status: "completed" } },
-        { $group: { _id: null, total: { $sum: "$amount" } } },
-      ]),
+    await connectDb();
+    const [
+      [userCount],
+      [appCount],
+      [pendingResetCount],
+      [revenueRow],
+    ] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(users),
+      db.select({ count: sql<number>`count(*)::int` }).from(apps),
+      db.select({ count: sql<number>`count(*)::int` }).from(passwordResetRequests).where(eq(passwordResetRequests.status, "pending")),
+      db.select({ total: sql<string>`COALESCE(SUM(amount),0)::text` }).from(payments).where(eq(payments.status, "completed")),
     ]);
     res.json({
-      totalUsers,
-      totalApps,
-      pendingResets,
-      totalRevenue: totalRevenue[0]?.total ?? 0,
+      totalUsers: userCount?.count ?? 0,
+      totalApps: appCount?.count ?? 0,
+      pendingResets: pendingResetCount?.count ?? 0,
+      totalRevenue: parseFloat(revenueRow?.total ?? "0"),
     });
   } catch (err) {
     req.log.error(err);
@@ -88,115 +70,98 @@ router.get("/admin/stats", requireAdmin, async (req, res) => {
   }
 });
 
-// GET /api/admin/users
 router.get("/admin/users", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const users = await User.find({}).sort({ createdAt: -1 }).lean();
-    const userIds = users.map((u) => u._id);
+    await connectDb();
+    const allUsers = await db.select().from(users).orderBy(desc(users.createdAt));
+    const userIds = allUsers.map((u) => u.id);
+
+    if (userIds.length === 0) { res.json([]); return; }
 
     const [appCounts, subs] = await Promise.all([
-      App.aggregate([
-        { $match: { owner: { $in: userIds } } },
-        { $group: { _id: "$owner", count: { $sum: 1 } } },
-      ]),
-      Subscription.find({
-        userId: { $in: userIds },
-        status: "active",
-        expiresAt: { $gt: new Date() },
-      }).lean(),
+      db.select({ ownerId: apps.ownerId, count: sql<number>`count(*)::int` })
+        .from(apps)
+        .where(inArray(apps.ownerId, userIds))
+        .groupBy(apps.ownerId),
+      db.select().from(subscriptions).where(
+        and(inArray(subscriptions.userId, userIds), eq(subscriptions.status, "active"), gt(subscriptions.expiresAt, new Date()))
+      ),
     ]);
 
     const countMap: Record<string, number> = {};
-    for (const { _id, count } of appCounts) countMap[_id.toString()] = count;
+    for (const { ownerId, count } of appCounts) countMap[ownerId] = count;
 
     const subMap: Record<string, Date> = {};
-    for (const s of subs) subMap[s.userId.toString()] = s.expiresAt;
+    for (const s of subs) subMap[s.userId] = s.expiresAt;
 
-    const result = users.map((u) => ({
-      id: u._id.toString(),
+    res.json(allUsers.map((u) => ({
+      id: u.id,
       email: u.email,
       phone: u.phone ?? "",
       status: u.status ?? "active",
-      appCount: countMap[u._id.toString()] ?? 0,
-      subscriptionActive: !!subMap[u._id.toString()],
-      subscriptionExpiry: subMap[u._id.toString()] ?? null,
+      appCount: countMap[u.id] ?? 0,
+      subscriptionActive: !!subMap[u.id],
+      subscriptionExpiry: subMap[u.id] ?? null,
       createdAt: u.createdAt,
-    }));
-    res.json(result);
+    })));
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// GET /api/admin/users/:id/apps
 router.get("/admin/users/:id/apps", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const apps = await App.find({ owner: req.params.id }).sort({ createdAt: -1 }).lean();
-    res.json(
-      apps.map((a) => ({
-        id: a._id.toString(),
-        name: a.name,
-        slug: a.slug,
-        repoUrl: a.repoUrl,
-        status: a.status,
-        lastDeployedAt: a.lastDeployedAt,
-        createdAt: a.createdAt,
-      }))
-    );
+    await connectDb();
+    const userApps = await db.select().from(apps).where(eq(apps.ownerId, req.params.id)).orderBy(desc(apps.createdAt));
+    res.json(userApps.map((a) => ({
+      id: a.id, name: a.name, slug: a.slug, repoUrl: a.repoUrl,
+      status: a.status, lastDeployedAt: a.lastDeployedAt, createdAt: a.createdAt,
+    })));
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// PATCH /api/admin/users/:id/status
 router.patch("/admin/users/:id/status", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
+    await connectDb();
     const { status } = req.body as { status: string };
     if (!["active", "suspended", "deactivated"].includes(status)) {
-      res.status(400).json({ error: "Invalid status. Use: active, suspended, deactivated" });
-      return;
+      res.status(400).json({ error: "Invalid status. Use: active, suspended, deactivated" }); return;
     }
-    const user = await User.findByIdAndUpdate(req.params.id, { status }, { new: true });
-    if (!user) {
-      res.status(404).json({ error: "User not found" });
-      return;
-    }
+    const [user] = await db.update(users).set({ status, updatedAt: new Date() }).where(eq(users.id, req.params.id)).returning();
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
     if (status === "suspended" || status === "deactivated") {
-      const apps = await App.find({ owner: user._id, status: "running" });
-      await Promise.all(apps.map((a) => stopApp(a._id.toString())));
-      user.refreshTokens = [];
-      await user.save();
+      const runningApps = await db.select().from(apps).where(and(eq(apps.ownerId, user.id), eq(apps.status, "running")));
+      await Promise.all(runningApps.map((a) => stopApp(a.id)));
+      await db.update(users).set({ refreshTokens: [], updatedAt: new Date() }).where(eq(users.id, user.id));
     }
-    res.json({ id: user._id.toString(), status: user.status });
+    res.json({ id: user.id, status: user.status });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// DELETE /api/admin/users/:id
 router.delete("/admin/users/:id", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const user = await User.findById(req.params.id);
-    if (!user) {
-      res.status(404).json({ error: "User not found" });
-      return;
-    }
-    const apps = await App.find({ owner: user._id });
-    await Promise.all(apps.map(async (a) => {
-      try { await stopApp(a._id.toString()); } catch {}
-      await Log.deleteMany({ appId: a._id });
-      await a.deleteOne();
+    await connectDb();
+    const [user] = await db.select().from(users).where(eq(users.id, req.params.id)).limit(1);
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+    const userApps = await db.select().from(apps).where(eq(apps.ownerId, user.id));
+    await Promise.all(userApps.map(async (a) => {
+      try { await stopApp(a.id); } catch {}
+      await db.delete(logs).where(eq(logs.appId, a.id));
+      await db.delete(apps).where(eq(apps.id, a.id));
     }));
-    await Payment.deleteMany({ userId: user._id });
-    await Subscription.deleteMany({ userId: user._id });
-    await user.deleteOne();
+
+    await db.delete(payments).where(eq(payments.userId, user.id));
+    await db.delete(subscriptions).where(eq(subscriptions.userId, user.id));
+    await db.delete(users).where(eq(users.id, user.id));
     res.json({ message: "User and all associated data deleted" });
   } catch (err) {
     req.log.error(err);
@@ -204,19 +169,15 @@ router.delete("/admin/users/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// GET /api/admin/password-requests
 router.get("/admin/password-requests", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const requests = await PasswordResetRequest.find({ status: "pending" })
-      .sort({ createdAt: -1 })
-      .lean();
+    await connectDb();
+    const requests = await db.select().from(passwordResetRequests)
+      .where(eq(passwordResetRequests.status, "pending"))
+      .orderBy(desc(passwordResetRequests.createdAt));
     res.json(requests.map((r) => ({
-      id: r._id.toString(),
-      email: r.email,
-      preferredPassword: r.preferredPassword,
-      status: r.status,
-      createdAt: r.createdAt,
+      id: r.id, email: r.email, preferredPassword: r.preferredPassword,
+      status: r.status, createdAt: r.createdAt,
     })));
   } catch (err) {
     req.log.error(err);
@@ -224,20 +185,19 @@ router.get("/admin/password-requests", requireAdmin, async (req, res) => {
   }
 });
 
-// PATCH /api/admin/password-requests/:id/resolve
 router.patch("/admin/password-requests/:id/resolve", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const request = await PasswordResetRequest.findById(req.params.id);
+    await connectDb();
+    const [request] = await db.select().from(passwordResetRequests).where(eq(passwordResetRequests.id, req.params.id)).limit(1);
     if (!request) { res.status(404).json({ error: "Request not found" }); return; }
     if (request.status !== "pending") { res.status(400).json({ error: "Request already resolved" }); return; }
-    const user = await User.findOne({ email: request.email });
+
+    const [user] = await db.select().from(users).where(eq(users.email, request.email)).limit(1);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
-    user.passwordHash = await bcrypt.hash(request.preferredPassword, 12);
-    user.refreshTokens = [];
-    await user.save();
-    request.status = "resolved";
-    await request.save();
+
+    const newHash = await bcrypt.hash(request.preferredPassword, 12);
+    await db.update(users).set({ passwordHash: newHash, refreshTokens: [], updatedAt: new Date() }).where(eq(users.id, user.id));
+    await db.update(passwordResetRequests).set({ status: "resolved", updatedAt: new Date() }).where(eq(passwordResetRequests.id, request.id));
     res.json({ message: "Password updated successfully" });
   } catch (err) {
     req.log.error(err);
@@ -245,14 +205,12 @@ router.patch("/admin/password-requests/:id/resolve", requireAdmin, async (req, r
   }
 });
 
-// PATCH /api/admin/password-requests/:id/reject
 router.patch("/admin/password-requests/:id/reject", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const request = await PasswordResetRequest.findById(req.params.id);
+    await connectDb();
+    const [request] = await db.select().from(passwordResetRequests).where(eq(passwordResetRequests.id, req.params.id)).limit(1);
     if (!request) { res.status(404).json({ error: "Request not found" }); return; }
-    request.status = "rejected";
-    await request.save();
+    await db.update(passwordResetRequests).set({ status: "rejected", updatedAt: new Date() }).where(eq(passwordResetRequests.id, request.id));
     res.json({ message: "Request rejected" });
   } catch (err) {
     req.log.error(err);
@@ -260,24 +218,21 @@ router.patch("/admin/password-requests/:id/reject", requireAdmin, async (req, re
   }
 });
 
-// GET /api/admin/apps
 router.get("/admin/apps", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const apps = await App.find({}).sort({ createdAt: -1 }).lean();
-    const ownerIds = [...new Set(apps.map((a) => a.owner.toString()))];
-    const users = await User.find({ _id: { $in: ownerIds } }, "email").lean();
+    await connectDb();
+    const allApps = await db.select().from(apps).orderBy(desc(apps.createdAt));
+    const ownerIds = [...new Set(allApps.map((a) => a.ownerId))];
+    const appUsers = ownerIds.length > 0
+      ? await db.select({ id: users.id, email: users.email }).from(users).where(inArray(users.id, ownerIds))
+      : [];
     const userMap: Record<string, string> = {};
-    for (const u of users) userMap[u._id.toString()] = u.email;
-    res.json(apps.map((a) => ({
-      id: a._id.toString(),
-      name: a.name,
-      slug: a.slug,
-      repoUrl: a.repoUrl,
-      status: a.status,
-      ownerEmail: userMap[a.owner.toString()] ?? "Unknown",
-      lastDeployedAt: a.lastDeployedAt,
-      createdAt: a.createdAt,
+    for (const u of appUsers) userMap[u.id] = u.email;
+
+    res.json(allApps.map((a) => ({
+      id: a.id, name: a.name, slug: a.slug, repoUrl: a.repoUrl,
+      status: a.status, ownerEmail: userMap[a.ownerId] ?? "Admin",
+      lastDeployedAt: a.lastDeployedAt, createdAt: a.createdAt,
     })));
   } catch (err) {
     req.log.error(err);
@@ -285,83 +240,53 @@ router.get("/admin/apps", requireAdmin, async (req, res) => {
   }
 });
 
-// POST /api/admin/users/:id/apps — deploy app on behalf of user
 router.post("/admin/users/:id/apps", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const user = await User.findById(req.params.id);
+    await connectDb();
+    const [user] = await db.select().from(users).where(eq(users.id, req.params.id)).limit(1);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
-    const { name, repoUrl, startCommand, installCommand, port, autoRestart } =
-      req.body as {
-        name: string;
-        repoUrl: string;
-        startCommand?: string;
-        installCommand?: string;
-        port?: number;
-        autoRestart?: boolean;
-      };
-    if (!name || !repoUrl) {
-      res.status(400).json({ error: "name and repoUrl are required" });
-      return;
-    }
-    const slugify = (await import("slugify")).default;
+
+    const { name, repoUrl, startCommand, installCommand, port, autoRestart } = req.body as {
+      name: string; repoUrl: string; startCommand?: string; installCommand?: string; port?: number; autoRestart?: boolean;
+    };
+    if (!name || !repoUrl) { res.status(400).json({ error: "name and repoUrl are required" }); return; }
+
     const baseSlug = slugify(name, { lower: true, strict: true });
-    const existing = await App.findOne({ owner: user._id, slug: baseSlug });
-    const slug = existing ? `${baseSlug}-${Date.now()}` : baseSlug;
-    const app = await App.create({
-      owner: user._id,
-      name,
-      slug,
-      repoUrl,
-      startCommand: startCommand ?? "",
-      installCommand: installCommand ?? "",
-      port: port ?? 3000,
-      autoRestart: autoRestart ?? true,
-      status: "idle",
-    });
-    res.status(201).json({
-      id: app._id.toString(),
-      name: app.name,
-      slug: app.slug,
-      status: app.status,
-    });
+    const existing = await db.select({ id: apps.id }).from(apps).where(and(eq(apps.ownerId, user.id), eq(apps.slug, baseSlug))).limit(1);
+    const slug = existing.length > 0 ? `${baseSlug}-${Date.now()}` : baseSlug;
+
+    const [app] = await db.insert(apps).values({
+      ownerId: user.id, name, slug, repoUrl,
+      startCommand: startCommand ?? "", installCommand: installCommand ?? "",
+      port: port ?? 3000, autoRestart: autoRestart ?? true, status: "idle",
+    }).returning();
+    res.status(201).json({ id: app.id, name: app.name, slug: app.slug, status: app.status });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// POST /api/admin/users/:id/subscription — manually grant 30-day subscription
 router.post("/admin/users/:id/subscription", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const user = await User.findById(req.params.id).lean();
+    await connectDb();
+    const [user] = await db.select().from(users).where(eq(users.id, req.params.id)).limit(1);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-    // Create a manual payment record
-    const payment = await Payment.create({
-      userId: user._id.toString(),
-      email: user.email,
-      phone: "",
-      amount: 150,
-      currency: "KES",
+    const [payment] = await db.insert(payments).values({
+      userId: user.id, email: user.email, phone: "",
+      amount: "150", currency: "KES",
       pesapalOrderId: `manual-${Date.now()}`,
       pesapalTrackingId: `manual-${Date.now()}`,
       status: "completed",
-    });
+    }).returning();
 
-    await Subscription.create({
-      userId: user._id.toString(),
-      email: user.email,
-      status: "active",
-      paidAt: now,
-      expiresAt,
-      amount: 150,
-      currency: "KES",
-      paymentId: payment._id,
+    await db.insert(subscriptions).values({
+      userId: user.id, email: user.email, status: "active",
+      paidAt: now, expiresAt, amount: "150", currency: "KES", paymentId: payment.id,
     });
 
     res.json({ message: "30-day subscription granted", expiresAt });
@@ -371,59 +296,46 @@ router.post("/admin/users/:id/subscription", requireAdmin, async (req, res) => {
   }
 });
 
-// DELETE /api/admin/users/:id/subscription — deactivate a user's active subscription
 router.delete("/admin/users/:id/subscription", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const user = await User.findById(req.params.id).lean();
+    await connectDb();
+    const [user] = await db.select().from(users).where(eq(users.id, req.params.id)).limit(1);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
-    const result = await Subscription.updateMany(
-      { userId: user._id.toString(), status: "active" },
-      { $set: { status: "cancelled" } }
-    );
-    res.json({ message: "Subscription deactivated", modified: result.modifiedCount });
+    await db.update(subscriptions)
+      .set({ status: "cancelled", updatedAt: new Date() })
+      .where(and(eq(subscriptions.userId, user.id), eq(subscriptions.status, "active")));
+    res.json({ message: "Subscription deactivated" });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// ── Admin's own apps ─────────────────────────────────────────────────────────
-
-function toAdminAppJson(app: InstanceType<typeof App>) {
+function toAdminAppJson(app: App) {
   return {
-    id: (app._id as mongoose.Types.ObjectId).toString(),
-    name: app.name,
-    slug: app.slug,
-    repoUrl: app.repoUrl,
-    branch: app.branch ?? "main",
-    status: app.status,
-    startCommand: app.startCommand,
-    installCommand: app.installCommand,
-    port: app.port,
-    autoRestart: app.autoRestart,
+    id: app.id, name: app.name, slug: app.slug, repoUrl: app.repoUrl, branch: app.branch ?? "main",
+    status: app.status, startCommand: app.startCommand, installCommand: app.installCommand,
+    port: app.port, autoRestart: app.autoRestart,
     envVars: (app.envVars ?? []).map((e: { key: string; value: string }) => ({ key: e.key, value: e.value })),
     lastDeployedAt: app.lastDeployedAt?.toISOString(),
-    createdAt: (app.createdAt as Date).toISOString(),
+    createdAt: app.createdAt.toISOString(),
   };
 }
 
-// GET /api/admin/my-apps
 router.get("/admin/my-apps", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const apps = await App.find({ owner: ADMIN_OWNER_ID }).sort({ createdAt: -1 }).lean();
-    res.json(apps.map((a) => ({
-      id: a._id.toString(), name: a.name, slug: a.slug, repoUrl: a.repoUrl,
-      status: a.status, lastDeployedAt: a.lastDeployedAt?.toISOString(), createdAt: (a.createdAt as Date).toISOString(),
+    await connectDb();
+    const adminApps = await db.select().from(apps).where(eq(apps.ownerId, ADMIN_OWNER_ID)).orderBy(desc(apps.createdAt));
+    res.json(adminApps.map((a) => ({
+      id: a.id, name: a.name, slug: a.slug, repoUrl: a.repoUrl,
+      status: a.status, lastDeployedAt: a.lastDeployedAt?.toISOString(), createdAt: a.createdAt.toISOString(),
     })));
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
-// POST /api/admin/my-apps — create + immediately deploy an admin app
 router.post("/admin/my-apps", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
+    await connectDb();
     const { name, repoUrl, branch, startCommand, installCommand, port, envVars } = req.body as {
       name: string; repoUrl: string; branch?: string; startCommand?: string;
       installCommand?: string; port?: number; envVars?: { key: string; value: string }[];
@@ -432,83 +344,76 @@ router.post("/admin/my-apps", requireAdmin, async (req, res) => {
 
     let base = slugify(name, { lower: true, strict: true }) || "admin-app";
     let slug = base; let counter = 1;
-    while (await App.exists({ slug })) { slug = `${base}-${counter++}`; }
+    while (true) {
+      const exists = await db.select({ id: apps.id }).from(apps).where(eq(apps.slug, slug)).limit(1);
+      if (exists.length === 0) break;
+      slug = `${base}-${counter++}`;
+    }
 
-    const app = await App.create({
-      owner: ADMIN_OWNER_ID, name, repoUrl, branch: branch ?? "main",
+    const [app] = await db.insert(apps).values({
+      ownerId: ADMIN_OWNER_ID, name, repoUrl, branch: branch ?? "main",
       slug, status: "idle", autoRestart: false,
-      ...(startCommand ? { startCommand } : {}),
-      ...(installCommand ? { installCommand } : {}),
-      ...(port ? { port } : {}),
-      envVars: envVars ?? [],
-    });
+      startCommand: startCommand ?? null, installCommand: installCommand ?? null,
+      port: port ?? null, envVars: envVars ?? [],
+    }).returning();
 
-    // Start deployment immediately (fire and forget)
-    startApp(app._id.toString()).catch(() => {});
+    startApp(app.id).catch(() => {});
     res.status(201).json(toAdminAppJson(app));
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
-// GET /api/admin/my-apps/:id
 router.get("/admin/my-apps/:id", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: ADMIN_OWNER_ID });
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     res.json(toAdminAppJson(app));
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
-// DELETE /api/admin/my-apps/:id
 router.delete("/admin/my-apps/:id", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: ADMIN_OWNER_ID });
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
-    await stopApp(app._id.toString());
-    await Log.deleteMany({ appId: app._id });
-    await App.deleteOne({ _id: app._id });
+    await stopApp(app.id);
+    await db.delete(logs).where(eq(logs.appId, app.id));
+    await db.delete(apps).where(eq(apps.id, app.id));
     res.json({ message: "App deleted" });
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
-// POST /api/admin/my-apps/:id/start
 router.post("/admin/my-apps/:id/start", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: ADMIN_OWNER_ID });
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
-    startApp(app._id.toString()).catch(() => {});
+    startApp(app.id).catch(() => {});
     res.json({ message: "Start initiated" });
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
-// POST /api/admin/my-apps/:id/stop
 router.post("/admin/my-apps/:id/stop", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: ADMIN_OWNER_ID });
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
-    await stopApp(app._id.toString());
+    await stopApp(app.id);
     res.json({ message: "App stopped" });
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
-// POST /api/admin/my-apps/:id/restart
 router.post("/admin/my-apps/:id/restart", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: ADMIN_OWNER_ID });
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
-    restartApp(app._id.toString()).catch(() => {});
+    restartApp(app.id).catch(() => {});
     res.json({ message: "Restart initiated" });
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
-// GET /api/admin/my-apps/:id/logs/stream — SSE for admin app logs
-// Uses ?token= query param because native EventSource cannot set headers
 router.get("/admin/my-apps/:id/logs/stream", async (req, res) => {
-  // Inline admin auth that also accepts ?token= for EventSource compatibility
   const token = (req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : null)
     ?? (typeof req.query.token === "string" ? req.query.token : null);
   if (!token) { res.status(401).json({ error: "Admin authentication required" }); return; }
@@ -516,8 +421,8 @@ router.get("/admin/my-apps/:id/logs/stream", async (req, res) => {
   catch { res.status(401).json({ error: "Invalid or expired admin token" }); return; }
 
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: ADMIN_OWNER_ID });
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
 
     res.setHeader("Content-Type", "text/event-stream");
@@ -532,64 +437,53 @@ router.get("/admin/my-apps/:id/logs/stream", async (req, res) => {
     const sinceRaw = req.query.since as string | undefined;
     if (sinceRaw) {
       const since = new Date(sinceRaw);
-      const gapLogs = await Log.find({ appId: app._id, timestamp: { $gt: since } }).sort({ timestamp: 1 }).limit(200).lean();
-      for (const log of gapLogs) send({ line: log.line, stream: log.stream, timestamp: (log.timestamp as Date).toISOString() });
+      const gapLogs = await db.select().from(logs)
+        .where(and(eq(logs.appId, app.id), gt(logs.timestamp, since)))
+        .orderBy(desc(logs.timestamp)).limit(200);
+      for (const log of gapLogs) send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
     } else {
-      const history = await Log.find({ appId: app._id }).sort({ timestamp: -1 }).limit(100).lean();
-      for (const log of history.reverse()) send({ line: log.line, stream: log.stream, timestamp: (log.timestamp as Date).toISOString() });
+      const history = await db.select().from(logs)
+        .where(eq(logs.appId, app.id))
+        .orderBy(desc(logs.timestamp)).limit(100);
+      for (const log of history.reverse()) send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
     }
 
-    const appId = (app._id as mongoose.Types.ObjectId).toString();
-    const unsubscribe = subscribeToLogs(appId, (ev) => send({ line: ev.line, stream: ev.stream, timestamp: ev.timestamp.toISOString() }));
+    const unsubscribe = subscribeToLogs(app.id, (ev) => send({ line: ev.line, stream: ev.stream, timestamp: ev.timestamp.toISOString() }));
     const keepAlive = setInterval(() => { res.write(": ping\n\n"); flush(); }, 15000);
-
     req.on("close", () => { unsubscribe(); clearInterval(keepAlive); });
   } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
-// PATCH /api/admin/apps/:id/action — stop/start app as admin
 router.patch("/admin/apps/:id/action", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
+    await connectDb();
     const { action } = req.body as { action: "stop" | "start" };
-    const app = await App.findById(req.params.id);
+    const [app] = await db.select().from(apps).where(eq(apps.id, req.params.id)).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
-    if (action === "stop") {
-      await stopApp(app._id.toString());
-    }
-    res.json({ id: app._id.toString(), status: app.status });
+    if (action === "stop") await stopApp(app.id);
+    const [updated] = await db.select().from(apps).where(eq(apps.id, app.id)).limit(1);
+    res.json({ id: app.id, status: updated?.status ?? app.status });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// GET /api/admin/revenue
 router.get("/admin/revenue", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    const payments = await Payment.find({})
-      .sort({ createdAt: -1 })
-      .lean();
-
-    const [total] = await Payment.aggregate([
-      { $match: { status: "completed" } },
-      { $group: { _id: null, total: { $sum: "$amount" } } },
+    await connectDb();
+    const [allPayments, [revenueRow]] = await Promise.all([
+      db.select().from(payments).orderBy(desc(payments.createdAt)),
+      db.select({ total: sql<string>`COALESCE(SUM(amount),0)::text` }).from(payments).where(eq(payments.status, "completed")),
     ]);
-
     res.json({
-      totalRevenue: total?.total ?? 0,
+      totalRevenue: parseFloat(revenueRow?.total ?? "0"),
       currency: "KES",
-      payments: payments.map((p) => ({
-        id: p._id.toString(),
-        email: p.email,
-        phone: p.phone,
-        amount: p.amount,
-        currency: p.currency,
-        status: p.status,
-        pesapalOrderId: p.pesapalOrderId,
-        pesapalTrackingId: p.pesapalTrackingId,
-        createdAt: p.createdAt,
+      payments: allPayments.map((p) => ({
+        id: p.id, email: p.email, phone: p.phone,
+        amount: parseFloat(p.amount), currency: p.currency,
+        status: p.status, pesapalOrderId: p.pesapalOrderId,
+        pesapalTrackingId: p.pesapalTrackingId, createdAt: p.createdAt,
       })),
     });
   } catch (err) {
@@ -598,12 +492,9 @@ router.get("/admin/revenue", requireAdmin, async (req, res) => {
   }
 });
 
-// POST /api/admin/settings/rawtest — test credentials passed in body, bypass MongoDB
 router.post("/admin/settings/rawtest", requireAdmin, async (req, res) => {
   const { consumerKey, consumerSecret, isProduction } = req.body as {
-    consumerKey: string;
-    consumerSecret: string;
-    isProduction?: boolean;
+    consumerKey: string; consumerSecret: string; isProduction?: boolean;
   };
   const key = (consumerKey ?? "").trim();
   const secret = (consumerSecret ?? "").trim();
@@ -611,103 +502,27 @@ router.post("/admin/settings/rawtest", requireAdmin, async (req, res) => {
   const baseUrl = prod ? "https://pay.pesapal.com/v3" : "https://cybqa.pesapal.com/pesapalv3";
   const url = `${baseUrl}/api/Auth/RequestToken`;
   const payload = JSON.stringify({ consumer_key: key, consumer_secret: secret });
-
   try {
-    const r = await fetch(url, {
+    const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: payload,
     });
-    const rawBody = await r.text();
-    let parsed: any = null;
-    try { parsed = JSON.parse(rawBody); } catch {}
-    res.json({
-      httpStatus: r.status,
-      requestPayload: payload,
-      keyLength: key.length,
-      secretLength: secret.length,
-      pesapalResponse: parsed ?? rawBody,
-      gotToken: !!(parsed?.token),
-    });
+    const data = await resp.json();
+    res.json({ ok: resp.ok, status: resp.status, data });
   } catch (err: any) {
-    res.json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/admin/settings/test — verify credentials and return raw PesaPal response
-router.get("/admin/settings/test", requireAdmin, async (req, res) => {
-  try {
-    await connectMongo();
-    const settings = await PesapalSettings.findOne({}).lean();
-    if (!settings?.consumerKey || !settings?.consumerSecret) {
-      res.json({ ok: false, message: "No credentials saved. Enter your Consumer Key and Secret first." });
-      return;
-    }
-
-    const key = settings.consumerKey.trim();
-    const secret = settings.consumerSecret.trim();
-    const isProduction = settings.isProduction ?? false;
-    const baseUrl = isProduction
-      ? "https://pay.pesapal.com/v3"
-      : "https://cybqa.pesapal.com/pesapalv3";
-    const url = `${baseUrl}/api/Auth/RequestToken`;
-
-    let httpStatus = 0;
-    let rawBody = "";
-    let parsed: any = null;
-
-    try {
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ consumer_key: key, consumer_secret: secret }),
-      });
-      httpStatus = r.status;
-      rawBody = await r.text();
-      try { parsed = JSON.parse(rawBody); } catch {}
-    } catch (fetchErr: any) {
-      res.json({ ok: false, message: `Network error reaching PesaPal: ${fetchErr.message}`, url });
-      return;
-    }
-
-    const token = parsed?.token;
-    const pesapalError = parsed?.error?.message || parsed?.error?.code || parsed?.message || rawBody.slice(0, 200);
-
-    res.json({
-      ok: !!token,
-      message: token
-        ? "Connection successful! PesaPal accepted your credentials."
-        : `PesaPal rejected credentials: ${pesapalError}`,
-      debug: {
-        url,
-        environment: isProduction ? "Production" : "Sandbox",
-        keyLength: key.length,
-        secretLength: secret.length,
-        httpStatus,
-        pesapalResponse: parsed ?? rawBody.slice(0, 500),
-      },
-    });
-  } catch (err: any) {
-    res.json({ ok: false, message: err.message ?? "Connection test failed" });
-  }
-});
-
-// GET /api/admin/settings
 router.get("/admin/settings", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
-    let settings = await PesapalSettings.findOne({}).lean();
-    if (!settings) {
-      await PesapalSettings.create({});
-      settings = await PesapalSettings.findOne({}).lean();
-    }
-    const s = settings!;
+    await connectDb();
+    const [settings] = await db.select().from(pesapalSettings).limit(1);
+    if (!settings) { res.json({ consumerKey: "", consumerSecret: "", ipnId: "", isProduction: false }); return; }
     res.json({
-      consumerKey: s.consumerKey ?? "",
-      consumerSecret: s.consumerSecret ? "***configured***" : "",
-      isProduction: s.isProduction ?? false,
-      ipnId: s.ipnId ?? "",
-      configured: !!(s.consumerKey && s.consumerSecret),
+      id: settings.id, consumerKey: settings.consumerKey, consumerSecret: settings.consumerSecret,
+      ipnId: settings.ipnId, isProduction: settings.isProduction,
     });
   } catch (err) {
     req.log.error(err);
@@ -715,33 +530,25 @@ router.get("/admin/settings", requireAdmin, async (req, res) => {
   }
 });
 
-// PUT /api/admin/settings
 router.put("/admin/settings", requireAdmin, async (req, res) => {
   try {
-    await connectMongo();
+    await connectDb();
     const { consumerKey, consumerSecret, isProduction } = req.body as {
-      consumerKey: string;
-      consumerSecret: string;
-      isProduction: boolean;
+      consumerKey: string; consumerSecret: string; isProduction?: boolean;
     };
-    const trimmedKey = (consumerKey ?? "").trim();
-    const trimmedSecret = (consumerSecret ?? "").trim();
-    if (!trimmedKey) {
-      res.status(400).json({ error: "consumerKey is required" });
-      return;
+    const [existing] = await db.select().from(pesapalSettings).limit(1);
+    if (existing) {
+      const [updated] = await db.update(pesapalSettings)
+        .set({ consumerKey: consumerKey.trim(), consumerSecret: consumerSecret.trim(), isProduction: isProduction ?? false, updatedAt: new Date() })
+        .where(eq(pesapalSettings.id, existing.id))
+        .returning();
+      res.json({ id: updated.id, consumerKey: updated.consumerKey, isProduction: updated.isProduction });
+    } else {
+      const [created] = await db.insert(pesapalSettings).values({
+        consumerKey: consumerKey.trim(), consumerSecret: consumerSecret.trim(), isProduction: isProduction ?? false,
+      }).returning();
+      res.json({ id: created.id, consumerKey: created.consumerKey, isProduction: created.isProduction });
     }
-
-    const update: Record<string, any> = { consumerKey: trimmedKey, isProduction: isProduction ?? false };
-    if (trimmedSecret && trimmedSecret !== "***configured***") {
-      update.consumerSecret = trimmedSecret;
-    }
-    update.ipnId = "";
-
-    const settings = await PesapalSettings.findOneAndUpdate({}, update, {
-      upsert: true,
-      new: true,
-    });
-    res.json({ message: "Settings saved", configured: true });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });

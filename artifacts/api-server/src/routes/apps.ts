@@ -1,17 +1,17 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import slugify from "slugify";
-import mongoose from "mongoose";
-import { connectMongo, App, Log, type IApp } from "@workspace/mongo";
+import { eq, and, desc, asc, gt } from "drizzle-orm";
+import { connectDb, db, apps, logs } from "@workspace/db";
+import type { App } from "@workspace/db";
 import { requireAuth } from "../middlewares/auth.js";
 import { startApp, stopApp, restartApp, subscribeToLogs } from "../services/processManager.js";
 import { encrypt, decrypt } from "../lib/crypto.js";
 
 const router: IRouter = Router();
 
-function toApiApp(doc: IApp | null) {
-  if (!doc) return null;
+function toApiApp(doc: App) {
   return {
-    id: (doc._id as mongoose.Types.ObjectId).toString(),
+    id: doc.id,
     name: doc.name,
     repoUrl: doc.repoUrl,
     branch: doc.branch ?? "main",
@@ -21,11 +21,11 @@ function toApiApp(doc: IApp | null) {
     startCommand: doc.startCommand ?? null,
     installCommand: doc.installCommand ?? null,
     port: doc.port ?? null,
-    envVars: doc.envVars.map((e) => ({ key: e.key, value: safeDecrypt(e.value) })),
+    envVars: (doc.envVars ?? []).map((e) => ({ key: e.key, value: safeDecrypt(e.value) })),
     lastDeployedAt: doc.lastDeployedAt?.toISOString() ?? null,
     errorMessage: doc.errorMessage ?? null,
-    createdAt: (doc.createdAt as Date).toISOString(),
-    updatedAt: (doc.updatedAt as Date).toISOString(),
+    createdAt: doc.createdAt.toISOString(),
+    updatedAt: doc.updatedAt.toISOString(),
   };
 }
 
@@ -42,12 +42,8 @@ function encryptEnvVars(envVars: Array<{ key: string; value: string }>) {
 }
 
 async function generateSlug(name: string): Promise<string> {
-  // slugify with strict:true removes anything that isn't a letter/number.
-  // If the name is empty, emoji-only, or pure unicode the result can be "".
-  // Fall back to "app" so we always get a valid base.
   let base = slugify(name ?? "", { lower: true, strict: true, trim: true });
   if (!base) {
-    // derive something readable from the raw name (ascii-only chars)
     base = (name ?? "")
       .replace(/[^a-zA-Z0-9\s-]/g, "")
       .trim()
@@ -60,7 +56,9 @@ async function generateSlug(name: string): Promise<string> {
 
   let candidate = base;
   let i = 0;
-  while (await App.exists({ slug: candidate })) {
+  while (true) {
+    const exists = await db.select({ id: apps.id }).from(apps).where(eq(apps.slug, candidate)).limit(1);
+    if (exists.length === 0) break;
     i++;
     candidate = `${base}-${i}`;
   }
@@ -69,9 +67,9 @@ async function generateSlug(name: string): Promise<string> {
 
 router.get("/apps", requireAuth, async (req: Request, res: Response) => {
   try {
-    await connectMongo();
-    const apps = await App.find({ owner: req.user!.userId }).sort({ createdAt: -1 });
-    res.json(apps.map(toApiApp));
+    await connectDb();
+    const result = await db.select().from(apps).where(eq(apps.ownerId, req.user!.userId)).orderBy(desc(apps.createdAt));
+    res.json(result.map(toApiApp));
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
@@ -115,7 +113,6 @@ router.get("/apps/env-template", requireAuth, async (req: Request, res: Response
       return;
     }
 
-    // Fallback: parse app.json (Heroku-style) for env var definitions
     for (const b of branchesToTry) {
       const url = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/app.json`;
       const resp = await fetch(url, { headers });
@@ -163,7 +160,6 @@ router.get("/apps/repo-meta", requireAuth, async (req: Request, res: Response) =
 
     const [, owner, repo] = match;
     const headers: Record<string, string> = pat ? { Authorization: `token ${pat}` } : {};
-
     const branchesToTry = branch
       ? [branch, "main", "master"].filter((v, i, a) => a.indexOf(v) === i)
       : ["main", "master"];
@@ -173,11 +169,7 @@ router.get("/apps/repo-meta", requireAuth, async (req: Request, res: Response) =
       const url = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/package.json`;
       const resp = await fetch(url, { headers });
       if (resp.ok) {
-        try {
-          pkgJson = await resp.json() as Record<string, unknown>;
-        } catch {
-          pkgJson = null;
-        }
+        try { pkgJson = await resp.json() as Record<string, unknown>; } catch { pkgJson = null; }
         break;
       }
     }
@@ -191,12 +183,10 @@ router.get("/apps/repo-meta", requireAuth, async (req: Request, res: Response) =
     let startCommand: string | null = scripts.start ?? scripts.serve ?? null;
     const buildCommand = scripts.build ?? null;
 
-    // If no start script, fall back to `node <main>` from package.json
     if (!startCommand && typeof pkgJson.main === "string" && pkgJson.main) {
       startCommand = `node ${pkgJson.main}`;
     }
 
-    // If still no start command, check Procfile for web process
     if (!startCommand) {
       for (const b of branchesToTry) {
         const pfUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/Procfile`;
@@ -204,21 +194,17 @@ router.get("/apps/repo-meta", requireAuth, async (req: Request, res: Response) =
         if (pfResp.ok) {
           const pfText = await pfResp.text();
           const webLine = pfText.split("\n").find((l) => l.startsWith("web:"));
-          if (webLine) {
-            startCommand = webLine.replace(/^web:\s*/, "").trim();
-          }
+          if (webLine) startCommand = webLine.replace(/^web:\s*/, "").trim();
           break;
         }
       }
     }
 
-    // Determine install command: respect packageManager field, else default to npm install
     let installCommand: string | null = null;
     if (pkgJson.packageManager && typeof pkgJson.packageManager === "string") {
       const pm = (pkgJson.packageManager as string).split("@")[0];
       installCommand = `${pm} install`;
     } else {
-      // Default to npm install since we found a package.json
       installCommand = "npm install";
     }
 
@@ -249,24 +235,14 @@ function parseEnvExample(content: string) {
 
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
-    if (!trimmed) {
-      lastComment = null;
-      continue;
-    }
-    if (trimmed.startsWith("#")) {
-      lastComment = trimmed.slice(1).trim();
-      continue;
-    }
+    if (!trimmed) { lastComment = null; continue; }
+    if (trimmed.startsWith("#")) { lastComment = trimmed.slice(1).trim(); continue; }
     const eqIdx = trimmed.indexOf("=");
-    if (eqIdx === -1) {
-      lastComment = null;
-      continue;
-    }
+    if (eqIdx === -1) { lastComment = null; continue; }
     const key = trimmed.slice(0, eqIdx).trim();
     const rawValue = trimmed.slice(eqIdx + 1).trim();
     const defaultValue = rawValue.replace(/^["']|["']$/g, "");
     const required = defaultValue === "" || defaultValue === '""' || defaultValue === "''";
-
     result.push({ key, defaultValue, comment: lastComment, required });
     lastComment = null;
   }
@@ -276,16 +252,10 @@ function parseEnvExample(content: string) {
 
 router.post("/apps", requireAuth, async (req: Request, res: Response) => {
   try {
-    await connectMongo();
+    await connectDb();
     const { name, repoUrl, branch, pat, autoRestart, startCommand, installCommand, port } = req.body as {
-      name: string;
-      repoUrl: string;
-      branch?: string;
-      pat?: string;
-      autoRestart?: boolean;
-      startCommand?: string;
-      installCommand?: string;
-      port?: number;
+      name: string; repoUrl: string; branch?: string; pat?: string;
+      autoRestart?: boolean; startCommand?: string; installCommand?: string; port?: number;
     };
 
     if (!name || !repoUrl) {
@@ -295,19 +265,19 @@ router.post("/apps", requireAuth, async (req: Request, res: Response) => {
 
     const slug = await generateSlug(name);
 
-    const app = await App.create({
-      owner: new mongoose.Types.ObjectId(req.user!.userId),
+    const [app] = await db.insert(apps).values({
+      ownerId: req.user!.userId,
       name,
       repoUrl,
       branch: branch || "main",
-      pat,
+      pat: pat ?? null,
       slug,
       autoRestart: autoRestart ?? false,
-      startCommand,
-      installCommand,
-      port,
+      startCommand: startCommand ?? null,
+      installCommand: installCommand ?? null,
+      port: port ?? null,
       status: "idle",
-    });
+    }).returning();
 
     res.status(201).json(toApiApp(app));
   } catch (err) {
@@ -318,8 +288,8 @@ router.post("/apps", requireAuth, async (req: Request, res: Response) => {
 
 router.get("/apps/:id", requireAuth, async (req: Request, res: Response) => {
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: req.user!.userId });
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
     if (!app) {
       res.status(404).json({ error: "App not found" });
       return;
@@ -333,18 +303,13 @@ router.get("/apps/:id", requireAuth, async (req: Request, res: Response) => {
 
 router.patch("/apps/:id", requireAuth, async (req: Request, res: Response) => {
   try {
-    await connectMongo();
+    await connectDb();
     const { name, repoUrl, pat, autoRestart, startCommand, installCommand, port } = req.body as {
-      name?: string;
-      repoUrl?: string;
-      pat?: string;
-      autoRestart?: boolean;
-      startCommand?: string;
-      installCommand?: string;
-      port?: number;
+      name?: string; repoUrl?: string; pat?: string; autoRestart?: boolean;
+      startCommand?: string; installCommand?: string; port?: number;
     };
 
-    const update: Record<string, unknown> = {};
+    const update: Record<string, unknown> = { updatedAt: new Date() };
     if (name !== undefined) update.name = name;
     if (repoUrl !== undefined) update.repoUrl = repoUrl;
     if (pat !== undefined) update.pat = pat;
@@ -353,11 +318,10 @@ router.patch("/apps/:id", requireAuth, async (req: Request, res: Response) => {
     if (installCommand !== undefined) update.installCommand = installCommand;
     if (port !== undefined) update.port = port;
 
-    const app = await App.findOneAndUpdate(
-      { _id: req.params.id, owner: req.user!.userId },
-      update,
-      { new: true }
-    );
+    const [app] = await db.update(apps)
+      .set(update as any)
+      .where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId)))
+      .returning();
     if (!app) {
       res.status(404).json({ error: "App not found" });
       return;
@@ -371,19 +335,17 @@ router.patch("/apps/:id", requireAuth, async (req: Request, res: Response) => {
 
 router.delete("/apps/:id", requireAuth, async (req: Request, res: Response) => {
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: req.user!.userId });
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
     if (!app) {
       res.status(404).json({ error: "App not found" });
       return;
     }
 
-    try {
-      await stopApp(app._id.toString());
-    } catch {
-    }
+    try { await stopApp(app.id); } catch {}
 
-    await app.deleteOne();
+    await db.delete(logs).where(eq(logs.appId, app.id));
+    await db.delete(apps).where(eq(apps.id, app.id));
     res.json({ message: "App deleted successfully" });
   } catch (err) {
     req.log.error(err);
@@ -393,7 +355,7 @@ router.delete("/apps/:id", requireAuth, async (req: Request, res: Response) => {
 
 router.put("/apps/:id/env", requireAuth, async (req: Request, res: Response) => {
   try {
-    await connectMongo();
+    await connectDb();
     const { envVars } = req.body as { envVars: Array<{ key: string; value: string }> };
 
     if (!Array.isArray(envVars)) {
@@ -401,11 +363,10 @@ router.put("/apps/:id/env", requireAuth, async (req: Request, res: Response) => 
       return;
     }
 
-    const app = await App.findOneAndUpdate(
-      { _id: req.params.id, owner: req.user!.userId },
-      { envVars: encryptEnvVars(envVars) },
-      { new: true }
-    );
+    const [app] = await db.update(apps)
+      .set({ envVars: encryptEnvVars(envVars), updatedAt: new Date() })
+      .where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId)))
+      .returning();
     if (!app) {
       res.status(404).json({ error: "App not found" });
       return;
@@ -419,17 +380,10 @@ router.put("/apps/:id/env", requireAuth, async (req: Request, res: Response) => 
 
 router.post("/apps/:id/start", requireAuth, async (req: Request, res: Response) => {
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: req.user!.userId });
-    if (!app) {
-      res.status(404).json({ error: "App not found" });
-      return;
-    }
-
-    startApp(app._id.toString()).catch((err) => {
-      req.log.error(err, "App start failed");
-    });
-
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+    startApp(app.id).catch((err) => { req.log.error(err, "App start failed"); });
     res.json({ message: "App start initiated" });
   } catch (err) {
     req.log.error(err);
@@ -439,14 +393,10 @@ router.post("/apps/:id/start", requireAuth, async (req: Request, res: Response) 
 
 router.post("/apps/:id/stop", requireAuth, async (req: Request, res: Response) => {
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: req.user!.userId });
-    if (!app) {
-      res.status(404).json({ error: "App not found" });
-      return;
-    }
-
-    await stopApp(app._id.toString());
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+    await stopApp(app.id);
     res.json({ message: "App stopped" });
   } catch (err) {
     req.log.error(err);
@@ -456,17 +406,10 @@ router.post("/apps/:id/stop", requireAuth, async (req: Request, res: Response) =
 
 router.post("/apps/:id/restart", requireAuth, async (req: Request, res: Response) => {
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: req.user!.userId });
-    if (!app) {
-      res.status(404).json({ error: "App not found" });
-      return;
-    }
-
-    restartApp(app._id.toString()).catch((err) => {
-      req.log.error(err, "App restart failed");
-    });
-
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
+    restartApp(app.id).catch((err) => { req.log.error(err, "App restart failed"); });
     res.json({ message: "App restart initiated" });
   } catch (err) {
     req.log.error(err);
@@ -476,25 +419,19 @@ router.post("/apps/:id/restart", requireAuth, async (req: Request, res: Response
 
 router.get("/apps/:id/logs", requireAuth, async (req: Request, res: Response) => {
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: req.user!.userId });
-    if (!app) {
-      res.status(404).json({ error: "App not found" });
-      return;
-    }
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
 
     const limit = parseInt((req.query.limit as string) ?? "100", 10);
-    const logs = await Log.find({ appId: app._id })
-      .sort({ timestamp: -1 })
-      .limit(limit)
-      .lean();
+    const logRows = await db.select().from(logs).where(eq(logs.appId, app.id)).orderBy(desc(logs.timestamp)).limit(limit);
 
-    const result = logs.reverse().map((l) => ({
-      id: l._id.toString(),
-      appId: app._id.toString(),
+    const result = logRows.reverse().map((l) => ({
+      id: l.id,
+      appId: app.id,
       line: l.line,
       stream: l.stream,
-      timestamp: (l.timestamp as Date).toISOString(),
+      timestamp: l.timestamp.toISOString(),
     }));
 
     res.json(result);
@@ -506,12 +443,9 @@ router.get("/apps/:id/logs", requireAuth, async (req: Request, res: Response) =>
 
 router.get("/apps/:id/logs/stream", requireAuth, async (req: Request, res: Response) => {
   try {
-    await connectMongo();
-    const app = await App.findOne({ _id: req.params.id, owner: req.user!.userId });
-    if (!app) {
-      res.status(404).json({ error: "App not found" });
-      return;
-    }
+    await connectDb();
+    const [app] = await db.select().from(apps).where(and(eq(apps.id, req.params.id), eq(apps.ownerId, req.user!.userId))).limit(1);
+    if (!app) { res.status(404).json({ error: "App not found" }); return; }
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -519,49 +453,31 @@ router.get("/apps/:id/logs/stream", requireAuth, async (req: Request, res: Respo
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
 
-    // flush helper — forces data through Express + any proxy buffering
-    const flush = () => { if (typeof (res as unknown as { flush?: () => void }).flush === "function") (res as unknown as { flush: () => void }).flush(); };
+    const flush = () => { if (typeof (res as any).flush === "function") (res as any).flush(); };
+    const send = (data: unknown) => { res.write(`data: ${JSON.stringify(data)}\n\n`); flush(); };
 
-    const send = (data: unknown) => {
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-      flush();
-    };
-
-    // If ?since= provided, only send logs after that timestamp (gap-fill).
-    // If not provided, send no history (caller loads history via REST).
     const sinceRaw = req.query.since as string | undefined;
     if (sinceRaw) {
       const since = new Date(sinceRaw);
-      const gapLogs = await Log.find({ appId: app._id, timestamp: { $gt: since } })
-        .sort({ timestamp: 1 })
-        .limit(200)
-        .lean();
+      const gapLogs = await db.select().from(logs)
+        .where(and(eq(logs.appId, app.id), gt(logs.timestamp, since)))
+        .orderBy(asc(logs.timestamp))
+        .limit(200);
       for (const log of gapLogs) {
-        send({ line: log.line, stream: log.stream, timestamp: (log.timestamp as Date).toISOString() });
+        send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
       }
     }
 
-    const appId = (app._id as mongoose.Types.ObjectId).toString();
-
-    // Subscribe to the in-memory log bus — instant delivery, no MongoDB polling
-    const unsubscribe = subscribeToLogs(appId, (ev) => {
+    const unsubscribe = subscribeToLogs(app.id, (ev) => {
       send({ line: ev.line, stream: ev.stream, timestamp: ev.timestamp.toISOString() });
     });
 
-    const keepAlive = setInterval(() => {
-      res.write(": ping\n\n");
-      flush();
-    }, 15000);
+    const keepAlive = setInterval(() => { res.write(": ping\n\n"); flush(); }, 15000);
 
-    req.on("close", () => {
-      clearInterval(keepAlive);
-      unsubscribe();
-    });
+    req.on("close", () => { clearInterval(keepAlive); unsubscribe(); });
   } catch (err) {
     req.log.error(err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
-    }
+    if (!res.headersSent) res.status(500).json({ error: "Internal server error" });
   }
 });
 

@@ -11,13 +11,14 @@
   },
   "dependencies": {
     "@workspace/api-zod": "workspace:*",
-    "@workspace/mongo": "workspace:*",
+    "@workspace/db": "workspace:*",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2",
+    "drizzle-orm": "catalog:",
     "express": "^5",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^8.23.0",
+    "pg": "^8.20.0",
     "pino": "^9",
     "pino-http": "^10",
     "slugify": "^1.6.8"
