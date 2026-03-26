@@ -113,15 +113,10 @@ export default function Admin() {
 
   // Admin's own apps
   type AdminOwnApp = { id: string; name: string; slug: string; repoUrl: string; status: string; lastDeployedAt?: string; createdAt: string };
-  type AdminAppDetail = AdminOwnApp & { branch: string; startCommand?: string; installCommand?: string; port?: number; autoRestart: boolean; envVars: { key: string; value: string }[] };
   type AdminLogLine = { line: string; stream: string; timestamp: string };
   const [adminApps, setAdminApps] = useState<AdminOwnApp[]>([]);
   const [isLoadingAdminApps, setIsLoadingAdminApps] = useState(false);
   const [selectedAdminAppId, setSelectedAdminAppId] = useState<string | null>(null);
-  const [selectedAdminAppDetail, setSelectedAdminAppDetail] = useState<AdminAppDetail | null>(null);
-  const [adminAppPanel, setAdminAppPanel] = useState<"logs" | "settings">("logs");
-  const [adminEnvVars, setAdminEnvVars] = useState<Array<{ key: string; value: string }>>([{ key: "", value: "" }]);
-  const [isSavingAdminEnv, setIsSavingAdminEnv] = useState(false);
   const [adminLogs, setAdminLogs] = useState<AdminLogLine[]>([]);
   const [adminAppAction, setAdminAppAction] = useState<string | null>(null);
   const adminLogEndRef = useRef<HTMLDivElement>(null);
@@ -148,7 +143,7 @@ export default function Admin() {
   // PesaPal settings
   const [settingsKey, setSettingsKey] = useState("");
   const [settingsSecret, setSettingsSecret] = useState("");
-  const [settingsProd, setSettingsProd] = useState(true);
+  const [settingsProd, setSettingsProd] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
@@ -478,8 +473,6 @@ export default function Admin() {
     if (adminEsRef.current) { adminEsRef.current.close(); adminEsRef.current = null; }
     setAdminLogs([]);
     setSelectedAdminAppId(appId);
-    setAdminAppPanel("logs");
-    setSelectedAdminAppDetail(null);
     const token = sessionStorage.getItem(ADMIN_TOKEN_KEY);
     const base = getBaseUrl();
     const es = new EventSource(`${base}/api/admin/my-apps/${appId}/logs/stream?token=${token}`);
@@ -491,12 +484,6 @@ export default function Admin() {
       } catch {}
     };
     es.onerror = () => { es.close(); adminEsRef.current = null; };
-    // Also fetch app details for the settings panel
-    adminFetch(`/api/admin/my-apps/${appId}`).then((r) => r.json()).then((detail) => {
-      setSelectedAdminAppDetail(detail);
-      const vars = detail.envVars ?? [];
-      setAdminEnvVars(vars.length > 0 ? vars : [{ key: "", value: "" }]);
-    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -1023,147 +1010,45 @@ export default function Admin() {
                 </Card>
               </div>
 
-              {/* Right: log terminal + settings */}
-              <div className="lg:col-span-2 space-y-3">
+              {/* Right: log terminal */}
+              <div className="lg:col-span-2">
                 {selectedAdminAppId ? (
-                  <>
-                    {/* Panel toggle */}
-                    <div className="flex gap-2">
-                      <Button size="sm" variant={adminAppPanel === "logs" ? "default" : "outline"} className="gap-1.5 h-8 text-xs" onClick={() => setAdminAppPanel("logs")}>
-                        <Terminal className="w-3.5 h-3.5" /> Logs
-                      </Button>
-                      <Button size="sm" variant={adminAppPanel === "settings" ? "default" : "outline"} className="gap-1.5 h-8 text-xs" onClick={() => setAdminAppPanel("settings")}>
-                        <Settings2 className="w-3.5 h-3.5" /> Env Vars & Settings
+                  <Card className="bg-[#0a0a0a] border-white/10 shadow-2xl overflow-hidden flex flex-col h-[600px]">
+                    <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 bg-white/[0.02]">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-red-500" />
+                        <div className="w-2 h-2 rounded-full bg-yellow-500" />
+                        <div className="w-2 h-2 rounded-full bg-green-500" />
+                        <span className="text-xs text-zinc-500 font-mono ml-2">
+                          {adminApps.find((a) => a.id === selectedAdminAppId)?.name ?? "app"} — logs
+                        </span>
+                      </div>
+                      <Button variant="ghost" size="sm" onClick={() => { setAdminLogs([]); }} className="h-6 text-xs text-zinc-500 hover:text-white">
+                        Clear
                       </Button>
                     </div>
-
-                    {adminAppPanel === "logs" && (
-                      <Card className="bg-[#0a0a0a] border-white/10 shadow-2xl overflow-hidden flex flex-col h-[560px]">
-                        <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 bg-white/[0.02]">
-                          <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 rounded-full bg-red-500" />
-                            <div className="w-2 h-2 rounded-full bg-yellow-500" />
-                            <div className="w-2 h-2 rounded-full bg-green-500" />
-                            <span className="text-xs text-zinc-500 font-mono ml-2">
-                              {adminApps.find((a) => a.id === selectedAdminAppId)?.name ?? "app"} — logs
+                    <div className="flex-1 overflow-y-auto p-4 font-mono text-[13px] leading-relaxed custom-scrollbar">
+                      {adminLogs.length === 0 ? (
+                        <p className="text-zinc-600 italic">Waiting for logs…</p>
+                      ) : (
+                        adminLogs.map((log, i) => (
+                          <div key={i} className="flex gap-4 hover:bg-white/5 px-2 rounded -mx-2">
+                            <span className="text-zinc-600 select-none flex-shrink-0 text-[11px] mt-0.5">
+                              {format(new Date(log.timestamp), "HH:mm:ss")}
+                            </span>
+                            <span className={clsx(
+                              "flex-1 break-all",
+                              log.stream === "stderr" ? "text-red-400" :
+                              log.stream === "system" ? "text-amber-400" : "text-zinc-300"
+                            )}>
+                              {log.line}
                             </span>
                           </div>
-                          <Button variant="ghost" size="sm" onClick={() => { setAdminLogs([]); }} className="h-6 text-xs text-zinc-500 hover:text-white">
-                            Clear
-                          </Button>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-4 font-mono text-[13px] leading-relaxed custom-scrollbar">
-                          {adminLogs.length === 0 ? (
-                            <p className="text-zinc-600 italic">Waiting for logs…</p>
-                          ) : (
-                            adminLogs.map((log, i) => (
-                              <div key={i} className="flex gap-4 hover:bg-white/5 px-2 rounded -mx-2">
-                                <span className="text-zinc-600 select-none flex-shrink-0 text-[11px] mt-0.5">
-                                  {format(new Date(log.timestamp), "HH:mm:ss")}
-                                </span>
-                                <span className={clsx(
-                                  "flex-1 break-all",
-                                  log.stream === "stderr" ? "text-red-400" :
-                                  log.stream === "system" ? "text-amber-400" : "text-zinc-300"
-                                )}>
-                                  {log.line}
-                                </span>
-                              </div>
-                            ))
-                          )}
-                          <div ref={adminLogEndRef} />
-                        </div>
-                      </Card>
-                    )}
-
-                    {adminAppPanel === "settings" && (
-                      <Card className="border border-border overflow-hidden">
-                        <div className="px-5 py-4 border-b border-border">
-                          <p className="font-semibold text-sm">{selectedAdminAppDetail?.name ?? "App"} — Environment Variables</p>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            Changes are saved to the database. Click <strong>Save &amp; Redeploy</strong> to apply them.
-                          </p>
-                        </div>
-                        <div className="p-5 space-y-3">
-                          {adminEnvVars.map((ev, idx) => (
-                            <div key={idx} className="flex gap-2 items-center">
-                              <Input
-                                placeholder="KEY"
-                                value={ev.key}
-                                onChange={(e) => setAdminEnvVars((prev) => prev.map((v, i) => i === idx ? { ...v, key: e.target.value } : v))}
-                                className="font-mono text-xs h-8 w-2/5"
-                              />
-                              <Input
-                                placeholder="value"
-                                value={ev.value}
-                                onChange={(e) => setAdminEnvVars((prev) => prev.map((v, i) => i === idx ? { ...v, value: e.target.value } : v))}
-                                className="font-mono text-xs h-8 flex-1"
-                              />
-                              <Button
-                                size="icon" variant="ghost"
-                                className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
-                                onClick={() => setAdminEnvVars((prev) => prev.filter((_, i) => i !== idx))}
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </Button>
-                            </div>
-                          ))}
-                          <Button size="sm" variant="outline" className="gap-1.5 text-xs h-8 mt-1" onClick={() => setAdminEnvVars((prev) => [...prev, { key: "", value: "" }])}>
-                            <Plus className="w-3 h-3" /> Add Variable
-                          </Button>
-                        </div>
-                        <div className="px-5 py-4 border-t border-border flex gap-3">
-                          <Button
-                            size="sm"
-                            className="gap-1.5 text-xs"
-                            disabled={isSavingAdminEnv}
-                            onClick={async () => {
-                              if (!selectedAdminAppId) return;
-                              setIsSavingAdminEnv(true);
-                              try {
-                                const validVars = adminEnvVars.filter((e) => e.key.trim());
-                                await adminFetch(`/api/admin/my-apps/${selectedAdminAppId}`, {
-                                  method: "PUT",
-                                  body: JSON.stringify({ envVars: validVars }),
-                                });
-                                await adminFetch(`/api/admin/my-apps/${selectedAdminAppId}/redeploy`, { method: "POST" });
-                                setAdminAppPanel("logs");
-                                setAdminLogs([]);
-                                openAdminLogs(selectedAdminAppId);
-                                toast({ title: "Saved & redeploying", description: "New env vars applied. Watch the logs." });
-                              } catch (e: any) {
-                                toast({ title: "Failed to save", description: e.message, variant: "destructive" });
-                              } finally { setIsSavingAdminEnv(false); }
-                            }}
-                          >
-                            {isSavingAdminEnv ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                            Save &amp; Redeploy
-                          </Button>
-                          <Button
-                            size="sm" variant="outline"
-                            className="gap-1.5 text-xs"
-                            disabled={isSavingAdminEnv}
-                            onClick={async () => {
-                              if (!selectedAdminAppId) return;
-                              setIsSavingAdminEnv(true);
-                              try {
-                                const validVars = adminEnvVars.filter((e) => e.key.trim());
-                                await adminFetch(`/api/admin/my-apps/${selectedAdminAppId}`, {
-                                  method: "PUT",
-                                  body: JSON.stringify({ envVars: validVars }),
-                                });
-                                toast({ title: "Saved", description: "Env vars updated. Restart the app to apply." });
-                              } catch (e: any) {
-                                toast({ title: "Failed to save", description: e.message, variant: "destructive" });
-                              } finally { setIsSavingAdminEnv(false); }
-                            }}
-                          >
-                            Save Only
-                          </Button>
-                        </div>
-                      </Card>
-                    )}
-                  </>
+                        ))
+                      )}
+                      <div ref={adminLogEndRef} />
+                    </div>
+                  </Card>
                 ) : (
                   <div className="flex flex-col items-center justify-center h-[600px] border border-dashed border-border rounded-2xl text-center px-8 gap-4">
                     <Activity className="w-10 h-10 text-muted-foreground/40" />
@@ -1239,29 +1124,19 @@ export default function Admin() {
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <div className="flex items-center gap-3 py-1">
-                    <button
-                      onClick={() => setSettingsProd((v) => !v)}
-                      className={clsx(
-                        "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
-                        settingsProd ? "bg-green-500" : "bg-red-500"
-                      )}
-                    >
-                      <span className={clsx("inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform", settingsProd ? "translate-x-4" : "translate-x-0.5")} />
-                    </button>
-                    <Label className="cursor-pointer font-medium" onClick={() => setSettingsProd((v) => !v)}>
-                      {settingsProd ? "✅ Production environment" : "⚠️ Sandbox environment (testing only)"}
-                    </Label>
-                  </div>
-                  {!settingsProd && (
-                    <div className="flex items-start gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2.5">
-                      <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                      <span className="leading-relaxed">
-                        <strong>Sandbox is active.</strong> Real M-Pesa payments will NOT work. Switch to Production and save to accept live payments.
-                      </span>
-                    </div>
-                  )}
+                <div className="flex items-center gap-3 py-2">
+                  <button
+                    onClick={() => setSettingsProd((v) => !v)}
+                    className={clsx(
+                      "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
+                      settingsProd ? "bg-green-500" : "bg-muted"
+                    )}
+                  >
+                    <span className={clsx("inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform", settingsProd ? "translate-x-4" : "translate-x-0.5")} />
+                  </button>
+                  <Label className="cursor-pointer" onClick={() => setSettingsProd((v) => !v)}>
+                    {settingsProd ? "Production environment" : "Sandbox environment (testing)"}
+                  </Label>
                 </div>
 
                 {testResult && (

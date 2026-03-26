@@ -1,28 +1,12 @@
 import { spawn, exec, execSync, type ChildProcess } from "child_process";
-import { existsSync, mkdirSync, rm, rename } from "fs";
+import { existsSync, mkdirSync, rm } from "fs";
 import path from "path";
 import os from "os";
 import { EventEmitter } from "events";
-import { eq, or } from "drizzle-orm";
-import { connectDb, db, apps, deployments } from "@workspace/db";
+import { eq, or, sql } from "drizzle-orm";
+import { connectDb, db, apps, logs } from "@workspace/db";
 import type { App } from "@workspace/db";
-import { decrypt, isEncrypted } from "../lib/crypto.js";
-
-// In-memory log ring buffer — no DB writes for logs.
-// Capped at LOG_BUFFER_SIZE lines per app so memory stays bounded.
-const LOG_BUFFER_SIZE = 500;
-const logBuffers = new Map<string, LogEvent[]>();
-
-export function getLogBuffer(appId: string): LogEvent[] {
-  return logBuffers.get(appId) ?? [];
-}
-
-function bufferLog(appId: string, ev: LogEvent) {
-  let buf = logBuffers.get(appId);
-  if (!buf) { buf = []; logBuffers.set(appId, buf); }
-  buf.push(ev);
-  if (buf.length > LOG_BUFFER_SIZE) buf.splice(0, buf.length - LOG_BUFFER_SIZE);
-}
+import { decrypt } from "../lib/crypto.js";
 
 export interface LogEvent {
   line: string;
@@ -39,6 +23,8 @@ export function subscribeToLogs(appId: string, cb: (ev: LogEvent) => void): () =
 }
 
 const APPS_DIR = process.env.APPS_DIR ?? path.join(os.homedir(), ".nutterx-apps");
+const NPM_CACHE_DIR = path.join(os.tmpdir(), "nutterx-npm-cache");
+const PNPM_STORE_DIR = path.join(os.tmpdir(), "nutterx-pnpm-store");
 
 let _pythonPath: string | null = null;
 function getPythonPath(): Promise<string> {
@@ -80,36 +66,17 @@ function removeDir(dir: string): Promise<void> {
   return new Promise((resolve) => { rm(dir, { recursive: true, force: true }, () => resolve()); });
 }
 
-function writeLog(appId: string, line: string, stream: "stdout" | "stderr" | "system") {
-  const ev: LogEvent = { line, stream, timestamp: new Date() };
-  bufferLog(appId, ev);
-  logBus.emit(appId, ev);
-}
-
-// Tracks the active deployment record so we can finalize it on success/failure
-const activeDeployments = new Map<string, { id: string; startedAt: number }>();
-
-async function createDeploymentRecord(appId: string, branch: string, triggeredBy: string): Promise<void> {
+async function writeLog(appId: string, line: string, stream: "stdout" | "stderr" | "system") {
+  const timestamp = new Date();
+  logBus.emit(appId, { line, stream, timestamp } satisfies LogEvent);
   try {
-    const [rec] = await db.insert(deployments).values({ appId, branch, triggeredBy, status: "building" }).returning({ id: deployments.id });
-    if (rec) activeDeployments.set(appId, { id: rec.id, startedAt: Date.now() });
-  } catch { /* non-fatal — deployment history is best-effort */ }
-}
-
-async function finalizeDeploymentRecord(appId: string, status: "success" | "failed" | "cancelled", errorMessage?: string): Promise<void> {
-  const entry = activeDeployments.get(appId);
-  if (!entry) return;
-  activeDeployments.delete(appId);
-  try {
-    const finishedAt = new Date();
-    const durationMs = Date.now() - entry.startedAt;
-    await db.update(deployments).set({
-      status,
-      finishedAt,
-      durationMs,
-      errorMessage: errorMessage ?? null,
-    }).where(eq(deployments.id, entry.id));
-  } catch { /* non-fatal */ }
+    await connectDb();
+    await db.insert(logs).values({ appId, line, stream, timestamp });
+    // Trim old logs: keep at most 500 per app (fire-and-forget)
+    db.execute(
+      sql`DELETE FROM logs WHERE app_id = ${appId} AND id NOT IN (SELECT id FROM logs WHERE app_id = ${appId} ORDER BY timestamp DESC LIMIT 500)`
+    ).catch(() => {});
+  } catch {}
 }
 
 export type AppStatus = "idle" | "installing" | "running" | "stopped" | "crashed" | "error";
@@ -130,55 +97,23 @@ function detectPackageManager(appDir: string): string {
 
 function emitLines(appId: string, chunk: Buffer, stream: "stdout" | "stderr" | "system") {
   const lines = chunk.toString().split(/\r?\n|\r/).filter((l) => l.trim());
-  for (const line of lines) writeLog(appId, line, stream);
+  for (const line of lines) writeLog(appId, line, stream).catch(() => {});
 }
 
-async function runCommand(
-  cmd: string, args: string[], cwd: string, appId: string,
-  env?: Record<string, string>, timeoutMs = 10 * 60 * 1000,
-  heartbeatIntervalMs?: number,
-): Promise<{ timedOut: boolean }> {
+async function runCommand(cmd: string, args: string[], cwd: string, appId: string, env?: Record<string, string>): Promise<void> {
   return new Promise((resolve, reject) => {
     if (stopRequested.has(appId)) { reject(new Error("Build cancelled by user")); return; }
     const proc = spawn(cmd, args, { cwd, env: env ?? process.env, shell: true });
     buildProcs.set(appId, proc);
     proc.stdout?.on("data", (d: Buffer) => emitLines(appId, d, "system"));
     proc.stderr?.on("data", (d: Buffer) => emitLines(appId, d, "stderr"));
-
-    let timedOut = false;
-    const startMs = Date.now();
-
-    // Optional heartbeat: print "still running..." every N seconds so log stream
-    // doesn't appear frozen during long silent downloads.
-    const heartbeat = heartbeatIntervalMs
-      ? setInterval(() => {
-          const elapsed = Math.round((Date.now() - startMs) / 1000);
-          writeLog(appId, `  ⏳ Still installing… (${elapsed}s elapsed)`, "system");
-        }, heartbeatIntervalMs)
-      : null;
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      if (heartbeat) clearInterval(heartbeat);
-      proc.kill("SIGKILL");
-      buildProcs.delete(appId);
-      reject(Object.assign(new Error(`Command timed out after ${Math.round(timeoutMs / 60000)} minutes: ${cmd} ${args.join(" ")}`), { timedOut: true }));
-    }, timeoutMs);
-
     proc.on("close", (code) => {
-      clearTimeout(timer);
-      if (heartbeat) clearInterval(heartbeat);
       buildProcs.delete(appId);
-      if (code === 0) resolve({ timedOut: false });
+      if (code === 0) resolve();
       else if (code === null && stopRequested.has(appId)) reject(new Error("Build cancelled by user"));
       else reject(new Error(`Process exited with code ${code}`));
     });
-    proc.on("error", (err) => {
-      clearTimeout(timer);
-      if (heartbeat) clearInterval(heartbeat);
-      buildProcs.delete(appId);
-      reject(err);
-    });
+    proc.on("error", (err) => { buildProcs.delete(appId); reject(err); });
   });
 }
 
@@ -196,14 +131,11 @@ export async function startApp(appId: string): Promise<void> {
 
   stopRequested.delete(appId);
   installingApps.add(appId);
-  logBuffers.delete(appId); // fresh buffer for new deploy
   await setStatus(appId, "installing");
-  writeLog(appId, `Starting deployment for ${app.name}...`, "system");
-
-  const branch = app.branch || "main";
-  await createDeploymentRecord(appId, branch, "user");
+  await writeLog(appId, `Starting deployment for ${app.name}...`, "system");
 
   const appDir = getAppDir(app.slug);
+  await removeDir(appDir);
 
   try {
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
@@ -211,43 +143,9 @@ export async function startApp(appId: string): Promise<void> {
     const cloneUrl = app.pat
       ? app.repoUrl.replace("https://", `https://${app.pat}@`)
       : app.repoUrl;
-
-    // Fresh clone every time — avoids stale .git state causing git fetch to hang.
-    // But RESCUE node_modules first: rename them out, restore after clone so that
-    // npm only installs what changed (massive speed boost on Render / cold disk).
-    const nmDir    = path.join(appDir, "node_modules");
-    const nmBackup = path.join(os.tmpdir(), `nutterx-nm-${app.slug}`);
-    const hasNm    = existsSync(nmDir);
-    if (hasNm) {
-      try {
-        // Remove any stale backup then atomically move current node_modules out
-        await removeDir(nmBackup);
-        await new Promise<void>((res, rej) => rename(nmDir, nmBackup, e => e ? rej(e) : res()));
-        writeLog(appId, `📦 Saved node_modules cache for faster reinstall.`, "system");
-      } catch { /* non-fatal — just do a full install */ }
-    }
-
-    writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
-    await removeDir(appDir);
-    await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId, undefined, 3 * 60_000);
-
-    // Restore node_modules from backup so npm does an incremental install
-    if (existsSync(nmBackup)) {
-      try {
-        await new Promise<void>((res, rej) => rename(nmBackup, nmDir, e => e ? rej(e) : res()));
-        writeLog(appId, `📦 Restored node_modules cache.`, "system");
-      } catch { /* non-fatal — npm will do a full install */ }
-    }
-
-    // Capture commit hash, then remove git history (not needed at runtime)
-    try {
-      const commitHash = execSync("git rev-parse HEAD", { cwd: appDir }).toString().trim();
-      const deployment = activeDeployments.get(appId);
-      if (deployment && commitHash) {
-        db.update(deployments).set({ commitHash }).where(eq(deployments.id, deployment.id)).catch(() => {});
-      }
-    } catch { /* non-fatal */ }
-    removeDir(path.join(appDir, ".git")).catch(() => {});
+    const branch = app.branch || "main";
+    await writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
+    await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId);
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
@@ -256,30 +154,33 @@ export async function startApp(appId: string): Promise<void> {
     const hasPnpmLock    = existsSync(path.join(appDir, "pnpm-lock.yaml"));
     const hasYarnLock    = existsSync(path.join(appDir, "yarn.lock"));
 
-    // Use npm ci when a lockfile is present (faster, exact installs)
+    // Default: use ci/frozen-lockfile variant when lockfile is present (much faster)
     let installCmd = app.installCommand || (
       pm === "pnpm" ? "pnpm install" :
       pm === "yarn" ? "yarn install"  :
       hasPackageLock ? "npm ci" : "npm install"
     );
 
-    // Append speed flags without overriding anything the user already set.
-    // We use a standard install (no --ignore-scripts, no --no-optional) so all
-    // packages and their postinstall hooks run normally — just like a local install.
-    if (/^\s*npm(\s|$)/.test(installCmd)) {
-      if (!/--no-audit/.test(installCmd))         installCmd += " --no-audit";
-      if (!/--no-fund/.test(installCmd))          installCmd += " --no-fund";
-      if (!/--legacy-peer-deps/.test(installCmd)) installCmd += " --legacy-peer-deps";
+    if (/^\s*npm\s+ci(\s|$)/.test(installCmd)) {
+      if (!/--ignore-scripts/.test(installCmd))  installCmd += " --ignore-scripts";
+      if (!/--no-audit/.test(installCmd))        installCmd += " --no-audit";
+      if (!/--no-fund/.test(installCmd))         installCmd += " --no-fund";
+      if (!/--cache/.test(installCmd))           installCmd += ` --cache ${NPM_CACHE_DIR}`;
+    } else if (/^\s*npm(\s|$)/.test(installCmd)) {
+      if (!/--ignore-platform/.test(installCmd)) installCmd += " --ignore-platform";
+      if (!/--no-audit/.test(installCmd))        installCmd += " --no-audit";
+      if (!/--no-fund/.test(installCmd))         installCmd += " --no-fund";
+      if (!/--prefer-offline/.test(installCmd))  installCmd += " --prefer-offline";
+      if (!/--cache/.test(installCmd))           installCmd += ` --cache ${NPM_CACHE_DIR}`;
     } else if (/^\s*pnpm(\s|$)/.test(installCmd)) {
+      if (!/--ignore-platform/.test(installCmd))  installCmd += " --ignore-platform";
+      if (!/--store-dir/.test(installCmd))        installCmd += ` --store-dir ${PNPM_STORE_DIR}`;
       if (hasPnpmLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
+      if (!hasPnpmLock && !/--prefer-offline/.test(installCmd)) installCmd += " --prefer-offline";
     } else if (/^\s*yarn(\s|$)/.test(installCmd)) {
       if (hasYarnLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
+      if (!hasYarnLock && !/--prefer-offline/.test(installCmd)) installCmd += " --prefer-offline";
     }
-
-    // Shared package cache — all apps share one download cache so packages are
-    // only fetched from the internet once; every subsequent install is local.
-    const npmCacheDir = path.join(os.homedir(), ".nutterx-npm-cache");
-    if (!existsSync(npmCacheDir)) mkdirSync(npmCacheDir, { recursive: true });
 
     const pythonPath = await getPythonPath();
     const installEnv: Record<string, string> = {
@@ -288,24 +189,23 @@ export async function startApp(appId: string): Promise<void> {
       PNPM_IGNORE_PLATFORM: "true",
       npm_config_audit: "false",
       npm_config_fund: "false",
-      npm_config_cache: npmCacheDir,
-      YARN_CACHE_FOLDER: path.join(npmCacheDir, "yarn"),
-      PNPM_STORE_DIR: path.join(npmCacheDir, "pnpm-store"),
+      npm_config_prefer_offline: "true",
       ...(pythonPath ? { npm_config_python: pythonPath, PYTHON: pythonPath } : {}),
       ...(NPM_GLOBAL_BIN ? { PATH: `${NPM_GLOBAL_BIN}:${process.env.PATH ?? ""}` } : {}),
     };
 
-    // Standard install — all packages, all postinstall hooks, 10-minute timeout.
-    // Uses the shared npm cache so repeat deploys are fast (packages already cached).
-    const INSTALL_TIMEOUT    = 10 * 60_000;
-    const HEARTBEAT_INTERVAL = 30_000;
-
     const [installBin, ...installArgs] = installCmd.split(" ");
-
-    writeLog(appId, `Installing dependencies...`, "system");
-    writeLog(appId, `Running: ${installBin} ${installArgs.join(" ")}`, "system");
-    await runCommand(installBin, installArgs, appDir, appId, installEnv, INSTALL_TIMEOUT, HEARTBEAT_INTERVAL);
-    writeLog(appId, `✅ Dependencies installed successfully.`, "system");
+    await writeLog(appId, `Installing dependencies with: ${installCmd}`, "system");
+    try {
+      await runCommand(installBin, installArgs, appDir, appId, installEnv);
+    } catch (installErr) {
+      const errMsg = installErr instanceof Error ? installErr.message : String(installErr);
+      await writeLog(appId, `Dependency install failed: ${errMsg}`, "stderr");
+      await writeLog(appId, `Retrying without native module compilation (--ignore-scripts)...`, "system");
+      const fallbackArgs = [...installArgs, "--ignore-scripts"];
+      await runCommand(installBin, fallbackArgs, appDir, appId, installEnv);
+      await writeLog(appId, `Dependencies installed without native modules. Some features may use JS fallbacks.`, "system");
+    }
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
@@ -313,13 +213,8 @@ export async function startApp(appId: string): Promise<void> {
     delete envVars["PORT"];
     if (NPM_GLOBAL_BIN) envVars["PATH"] = `${NPM_GLOBAL_BIN}:${envVars["PATH"] ?? ""}`;
     for (const envVar of (app.envVars ?? [])) {
-      // Env vars are stored as plaintext. Backward-compat: decrypt values that
-      // were saved before the encryption-removal migration.
-      if (isEncrypted(envVar.value)) {
-        try { envVars[envVar.key] = decrypt(envVar.value); } catch { /* skip corrupted legacy var */ }
-      } else {
-        envVars[envVar.key] = envVar.value;
-      }
+      try { envVars[envVar.key] = decrypt(envVar.value); }
+      catch { envVars[envVar.key] = envVar.value; }
     }
     if (app.port) envVars["PORT"] = String(app.port);
 
@@ -334,12 +229,12 @@ export async function startApp(appId: string): Promise<void> {
       if (!script.includes("config.js") && !script.includes("ecosystem")) {
         const oldCmd = startCmd;
         startCmd = `node ${script}`;
-        writeLog(appId, `Converted "${oldCmd}" → "${startCmd}" for proper process control`, "system");
+        await writeLog(appId, `Converted "${oldCmd}" → "${startCmd}" for proper process control`, "system");
       }
     }
 
     const [startBin, ...startArgs] = startCmd.split(" ");
-    writeLog(appId, `Starting app with: ${startCmd}`, "system");
+    await writeLog(appId, `Starting app with: ${startCmd}`, "system");
 
     // Mark running in DB before spawning. Retry once on transient DB failure.
     installingApps.delete(appId);
@@ -349,34 +244,33 @@ export async function startApp(appId: string): Promise<void> {
       await new Promise<void>((r) => setTimeout(r, 1500));
       await setStatus(appId, "running");
     }
-    await finalizeDeploymentRecord(appId, "success");
 
     const proc = spawn(startBin, startArgs, { cwd: appDir, env: envVars, shell: true });
     const entry: RunningProcess = { process: proc, appId, restartCount: 0, stopped: false };
     processes.set(appId, entry);
 
-    proc.stdout?.on("data", (d: Buffer) => emitLines(appId, d, "stdout"));
-    proc.stderr?.on("data", (d: Buffer) => emitLines(appId, d, "stderr"));
+    proc.stdout?.on("data", (d: Buffer) => { writeLog(appId, d.toString().trimEnd(), "stdout").catch(() => {}); });
+    proc.stderr?.on("data", (d: Buffer) => { writeLog(appId, d.toString().trimEnd(), "stderr").catch(() => {}); });
 
     proc.on("close", async (code) => {
       const current = processes.get(appId);
       if (!current || current.stopped) {
-        writeLog(appId, `App stopped (exit code: ${code})`, "system");
-        processes.delete(appId);
         await setStatus(appId, "stopped");
+        await writeLog(appId, `App stopped (exit code: ${code})`, "system");
+        processes.delete(appId);
         return;
       }
 
-      writeLog(appId, `App crashed (exit code: ${code})`, "system");
+      await writeLog(appId, `App crashed (exit code: ${code})`, "system");
 
       const [freshApp] = await db.select({ autoRestart: apps.autoRestart }).from(apps).where(eq(apps.id, appId)).limit(1);
       if (freshApp?.autoRestart && current.restartCount < 5) {
         current.restartCount++;
-        writeLog(appId, `Auto-restarting (attempt ${current.restartCount}/5)...`, "system");
+        await writeLog(appId, `Auto-restarting (attempt ${current.restartCount}/5)...`, "system");
         processes.delete(appId);
         setTimeout(() => {
           startApp(appId).catch(async (e) => {
-            writeLog(appId, `Auto-restart failed: ${e.message}`, "system");
+            await writeLog(appId, `Auto-restart failed: ${e.message}`, "system");
             await setStatus(appId, "crashed");
           });
         }, 2000 * current.restartCount);
@@ -387,7 +281,7 @@ export async function startApp(appId: string): Promise<void> {
     });
 
     proc.on("error", async (err) => {
-      writeLog(appId, `Process error: ${err.message}`, "system");
+      await writeLog(appId, `Process error: ${err.message}`, "system");
       await setStatus(appId, "error", err.message);
       processes.delete(appId);
     });
@@ -398,12 +292,10 @@ export async function startApp(appId: string): Promise<void> {
     installingApps.delete(appId);
     buildProcs.delete(appId);
     if (isCancelled) {
-      writeLog(appId, "Deployment cancelled by user.", "system");
-      await finalizeDeploymentRecord(appId, "cancelled");
+      await writeLog(appId, "Deployment cancelled by user.", "system");
       await setStatus(appId, "stopped");
     } else {
-      writeLog(appId, `Deployment failed: ${message}`, "system");
-      await finalizeDeploymentRecord(appId, "failed", message);
+      await writeLog(appId, `Deployment failed: ${message}`, "system");
       await setStatus(appId, "error", message);
       throw err;
     }
@@ -434,7 +326,7 @@ export async function stopApp(appId: string): Promise<void> {
   });
   processes.delete(appId);
   await setStatus(appId, "stopped");
-  writeLog(appId, "App stopped by user", "system");
+  await writeLog(appId, "App stopped by user", "system");
 }
 
 export async function restartApp(appId: string): Promise<void> {
@@ -447,11 +339,6 @@ export async function restartApp(appId: string): Promise<void> {
 
 export function getProcessStatus(appId: string): boolean {
   return processes.has(appId);
-}
-
-export async function deleteAppFiles(slug: string): Promise<void> {
-  const appDir = getAppDir(slug);
-  await removeDir(appDir);
 }
 
 export async function recoverApps(): Promise<void> {

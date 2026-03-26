@@ -1,27 +1,13 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import slugify from "slugify";
-import { eq, and, desc } from "drizzle-orm";
-import { connectDb, db, apps, logs, deployments } from "@workspace/db";
-import type { App, Deployment } from "@workspace/db";
+import { eq, and, desc, asc, gt } from "drizzle-orm";
+import { connectDb, db, apps, logs } from "@workspace/db";
+import type { App } from "@workspace/db";
 import { requireAuth } from "../middlewares/auth.js";
-import { startApp, stopApp, restartApp, subscribeToLogs, getLogBuffer, deleteAppFiles } from "../services/processManager.js";
-import { decrypt, isEncrypted } from "../lib/crypto.js";
+import { startApp, stopApp, restartApp, subscribeToLogs } from "../services/processManager.js";
+import { encrypt, decrypt } from "../lib/crypto.js";
 
 const router: IRouter = Router();
-
-// Env vars are stored as plaintext. This helper only exists for backward
-// compatibility — values saved before the encryption-removal migration may
-// still be in ciphertext form in the database. We silently decrypt those on
-// read so they appear correctly. Any re-save will write them as plaintext.
-function safeDecrypt(value: string): string {
-  if (!isEncrypted(value)) return value; // already plaintext — fast path
-  try { return decrypt(value); } catch { return value; }
-}
-
-// No-op wrapper kept for call-site compatibility. Stores values as plaintext.
-function encryptEnvVars(envVars: Array<{ key: string; value: string }>) {
-  return envVars; // plaintext — no encryption
-}
 
 function toApiApp(doc: App) {
   return {
@@ -41,6 +27,18 @@ function toApiApp(doc: App) {
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString(),
   };
+}
+
+function safeDecrypt(value: string): string {
+  try {
+    return decrypt(value);
+  } catch {
+    return value;
+  }
+}
+
+function encryptEnvVars(envVars: Array<{ key: string; value: string }>) {
+  return envVars.map((e) => ({ key: e.key, value: encrypt(e.value) }));
 }
 
 async function generateSlug(name: string): Promise<string> {
@@ -74,7 +72,7 @@ router.get("/apps", requireAuth, async (req: Request, res: Response) => {
     res.json(result.map(toApiApp));
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -162,7 +160,7 @@ router.get("/apps/env-template", requireAuth, async (req: Request, res: Response
     res.status(404).json({ error: "No .env.example or app.json found in repository" });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -247,7 +245,7 @@ router.get("/apps/repo-meta", requireAuth, async (req: Request, res: Response) =
     res.json({ startCommand, buildCommand, installCommand, port, scripts: Object.keys(scripts) });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -305,9 +303,8 @@ router.post("/apps", requireAuth, async (req: Request, res: Response) => {
 
     res.status(201).json(toApiApp(app));
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    req.log.error({ err, msg }, "POST /apps failed");
-    res.status(500).json({ error: msg });
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -322,7 +319,7 @@ router.get("/apps/:id", requireAuth, async (req: Request, res: Response) => {
     res.json(toApiApp(app));
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -354,20 +351,7 @@ router.patch("/apps/:id", requireAuth, async (req: Request, res: Response) => {
     res.json(toApiApp(app));
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
-  }
-});
-
-router.get("/apps/:id/deployments", requireAuth, async (req: Request, res: Response) => {
-  try {
-    await connectDb();
-    const [app] = await db.select({ id: apps.id }).from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId))).limit(1);
-    if (!app) { res.status(404).json({ error: "App not found" }); return; }
-    const rows = await db.select().from(deployments).where(eq(deployments.appId, app.id)).orderBy(desc(deployments.startedAt)).limit(50);
-    res.json(rows);
-  } catch (err) {
-    req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -383,13 +367,11 @@ router.delete("/apps/:id", requireAuth, async (req: Request, res: Response) => {
     try { await stopApp(app.id); } catch {}
 
     await db.delete(logs).where(eq(logs.appId, app.id));
-    await db.delete(deployments).where(eq(deployments.appId, app.id));
     await db.delete(apps).where(eq(apps.id, app.id));
-    deleteAppFiles(app.slug).catch(() => {}); // fire-and-forget disk cleanup
     res.json({ message: "App deleted successfully" });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -414,7 +396,7 @@ router.put("/apps/:id/env", requireAuth, async (req: Request, res: Response) => 
     res.json(toApiApp(app));
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -427,7 +409,7 @@ router.post("/apps/:id/start", requireAuth, async (req: Request, res: Response) 
     res.json({ message: "App start initiated" });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -440,7 +422,7 @@ router.post("/apps/:id/stop", requireAuth, async (req: Request, res: Response) =
     res.json({ message: "App stopped" });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -453,7 +435,7 @@ router.post("/apps/:id/restart", requireAuth, async (req: Request, res: Response
     res.json({ message: "App restart initiated" });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -463,19 +445,21 @@ router.get("/apps/:id/logs", requireAuth, async (req: Request, res: Response) =>
     const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, req.user!.userId))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
 
-    const buf = getLogBuffer(app.id);
     const limit = parseInt((req.query.limit as string) ?? "100", 10);
-    const slice = buf.slice(-limit);
-    res.json(slice.map((l, i) => ({
-      id: i,
+    const logRows = await db.select().from(logs).where(eq(logs.appId, app.id)).orderBy(desc(logs.timestamp)).limit(limit);
+
+    const result = logRows.reverse().map((l) => ({
+      id: l.id,
       appId: app.id,
       line: l.line,
       stream: l.stream,
       timestamp: l.timestamp.toISOString(),
-    })));
+    }));
+
+    res.json(result);
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -497,9 +481,12 @@ router.get("/apps/:id/logs/stream", requireAuth, async (req: Request, res: Respo
     const sinceRaw = req.query.since as string | undefined;
     if (sinceRaw) {
       const since = new Date(sinceRaw);
-      const buf = getLogBuffer(app.id);
-      for (const log of buf) {
-        if (log.timestamp > since) send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
+      const gapLogs = await db.select().from(logs)
+        .where(and(eq(logs.appId, app.id), gt(logs.timestamp, since)))
+        .orderBy(asc(logs.timestamp))
+        .limit(200);
+      for (const log of gapLogs) {
+        send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
       }
     }
 
@@ -512,7 +499,7 @@ router.get("/apps/:id/logs/stream", requireAuth, async (req: Request, res: Respo
     req.on("close", () => { clearInterval(keepAlive); unsubscribe(); });
   } catch (err) {
     req.log.error(err);
-    if (!res.headersSent) { const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em }); }
+    if (!res.headersSent) res.status(500).json({ error: "Internal server error" });
   }
 });
 

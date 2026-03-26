@@ -127,22 +127,6 @@ CREATE TABLE IF NOT EXISTS pesapal_settings (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
-CREATE TABLE IF NOT EXISTS deployments (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  app_id TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'building',
-  branch TEXT NOT NULL DEFAULT 'main',
-  commit_hash TEXT,
-  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  finished_at TIMESTAMPTZ,
-  duration_ms INTEGER,
-  error_message TEXT,
-  triggered_by TEXT NOT NULL DEFAULT 'user'
-);
-
-CREATE INDEX IF NOT EXISTS deployments_app_id_idx ON deployments(app_id);
-CREATE INDEX IF NOT EXISTS deployments_app_started_idx ON deployments(app_id, started_at);
 `;
 
 async function tryConnect(url: string, attempts = 3): Promise<pg.Pool | null> {

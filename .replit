@@ -31,7 +31,7 @@ timeoutMs = 20000
 
 [nix]
 channel = "stable-25_05"
-packages = ["python3", "gcc", "gnumake", "pkg-config", "xz", "bzip2", "autoconf", "automake", "libtool", "gir-rs"]
+packages = ["python3", "gcc", "gnumake", "pkg-config", "xz", "bzip2", "autoconf", "automake", "libtool"]
 
 [[ports]]
 localPort = 5000

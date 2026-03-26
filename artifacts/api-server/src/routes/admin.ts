@@ -4,11 +4,11 @@ import jwt from "jsonwebtoken";
 import { eq, and, desc, gt, inArray, or, sql } from "drizzle-orm";
 import {
   connectDb, db,
-  users, apps, logs, passwordResetRequests, payments, subscriptions, pesapalSettings, deployments,
+  users, apps, logs, passwordResetRequests, payments, subscriptions, pesapalSettings,
 } from "@workspace/db";
 import type { App } from "@workspace/db";
 import slugify from "slugify";
-import { startApp, stopApp, restartApp, subscribeToLogs, getLogBuffer, deleteAppFiles } from "../services/processManager.js";
+import { startApp, stopApp, restartApp, subscribeToLogs } from "../services/processManager.js";
 import { encrypt, decrypt } from "../lib/crypto.js";
 
 function safeDecrypt(value: string): string {
@@ -74,7 +74,7 @@ router.get("/admin/stats", requireAdmin, async (req, res) => {
     });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -114,7 +114,7 @@ router.get("/admin/users", requireAdmin, async (req, res) => {
     })));
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -128,7 +128,7 @@ router.get("/admin/users/:id/apps", requireAdmin, async (req, res) => {
     })));
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -150,7 +150,7 @@ router.patch("/admin/users/:id/status", requireAdmin, async (req, res) => {
     res.json({ id: user.id, status: user.status });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -164,9 +164,7 @@ router.delete("/admin/users/:id", requireAdmin, async (req, res) => {
     await Promise.all(userApps.map(async (a) => {
       try { await stopApp(a.id); } catch {}
       await db.delete(logs).where(eq(logs.appId, a.id));
-      await db.delete(deployments).where(eq(deployments.appId, a.id));
       await db.delete(apps).where(eq(apps.id, a.id));
-      deleteAppFiles(a.slug).catch(() => {});
     }));
 
     await db.delete(payments).where(eq(payments.userId, user.id));
@@ -175,7 +173,7 @@ router.delete("/admin/users/:id", requireAdmin, async (req, res) => {
     res.json({ message: "User and all associated data deleted" });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -191,7 +189,7 @@ router.get("/admin/password-requests", requireAdmin, async (req, res) => {
     })));
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -211,7 +209,7 @@ router.patch("/admin/password-requests/:id/resolve", requireAdmin, async (req, r
     res.json({ message: "Password updated successfully" });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -224,7 +222,7 @@ router.patch("/admin/password-requests/:id/reject", requireAdmin, async (req, re
     res.json({ message: "Request rejected" });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -246,7 +244,7 @@ router.get("/admin/apps", requireAdmin, async (req, res) => {
     })));
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -280,7 +278,7 @@ router.get("/admin/repo-meta", requireAdmin, async (req, res) => {
       installCommand = `${pm} install`;
     }
     res.json({ startCommand, buildCommand: scripts.build ?? null, installCommand, scripts: Object.keys(scripts) });
-  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
 router.get("/admin/env-template", requireAdmin, async (req, res) => {
@@ -311,8 +309,8 @@ router.get("/admin/env-template", requireAdmin, async (req, res) => {
       return result;
     }
 
-    // 1. Try .env.example, .env.sample, and set.env (common in WhatsApp bots)
-    const envFiles = [".env.example", ".env.sample", "set.env", ".env.template"];
+    // 1. Try .env.example and .env.sample
+    const envFiles = [".env.example", ".env.sample"];
     for (const b of branchesToTry) {
       for (const envFile of envFiles) {
         const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${envFile}`, { headers });
@@ -320,28 +318,7 @@ router.get("/admin/env-template", requireAdmin, async (req, res) => {
       }
     }
 
-    // 2. Try app.json (Heroku manifest) — preferred over source scanning
-    for (const b of branchesToTry) {
-      const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/app.json`, { headers });
-      if (resp.ok) {
-        try {
-          const appJson = await resp.json() as Record<string, unknown>;
-          const envSection = appJson.env as Record<string, { description?: string; value?: string; required?: boolean }> | undefined;
-          if (envSection && typeof envSection === "object") {
-            const keys = Object.entries(envSection).map(([key, meta]) => ({
-              key,
-              defaultValue: meta?.value ?? "",
-              comment: meta?.description ?? null,
-              required: meta?.required !== false,
-            }));
-            res.json({ keys, source: "app.json" });
-            return;
-          }
-        } catch { /* not valid JSON, skip */ }
-      }
-    }
-
-    // 3. Fallback: scan source files for process.env.XXX — like Heroku config detection
+    // 2. Fallback: scan source files for process.env.XXX — like Heroku config detection
     const sourceFiles = [
       "app.js", "app.ts", "index.js", "index.ts",
       "server.js", "server.ts", "bot.js", "bot.ts",
@@ -354,6 +331,7 @@ router.get("/admin/env-template", requireAdmin, async (req, res) => {
         const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${file}`, { headers });
         if (!resp.ok) continue;
         const text = await resp.text();
+        // Match process.env.VAR_NAME (not followed by ?)
         const matches = text.matchAll(/process\.env\.([A-Z][A-Z0-9_]{1,})/g);
         for (const m of matches) detectedKeys.add(m[1]);
         if (detectedKeys.size > 0) break;
@@ -369,8 +347,8 @@ router.get("/admin/env-template", requireAdmin, async (req, res) => {
       return;
     }
 
-    res.status(404).json({ error: "No .env.example or app.json found in repository" });
-  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
+    res.status(404).json({ error: "No .env.example found in repository" });
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
 router.post("/admin/users/:id/apps", requireAdmin, async (req, res) => {
@@ -409,7 +387,7 @@ router.post("/admin/users/:id/apps", requireAdmin, async (req, res) => {
     res.status(201).json({ id: app.id, name: app.name, slug: app.slug, status: app.status });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -438,7 +416,7 @@ router.post("/admin/users/:id/subscription", requireAdmin, async (req, res) => {
     res.json({ message: "30-day subscription granted", expiresAt });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -453,7 +431,7 @@ router.delete("/admin/users/:id/subscription", requireAdmin, async (req, res) =>
     res.json({ message: "Subscription deactivated" });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -476,7 +454,7 @@ router.get("/admin/my-apps", requireAdmin, async (req, res) => {
       id: a.id, name: a.name, slug: a.slug, repoUrl: a.repoUrl,
       status: a.status, lastDeployedAt: a.lastDeployedAt?.toISOString(), createdAt: a.createdAt.toISOString(),
     })));
-  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
 router.post("/admin/my-apps", requireAdmin, async (req, res) => {
@@ -505,7 +483,7 @@ router.post("/admin/my-apps", requireAdmin, async (req, res) => {
 
     startApp(app.id).catch(() => {});
     res.status(201).json(toAdminAppJson(app));
-  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
 router.get("/admin/my-apps/:id", requireAdmin, async (req, res) => {
@@ -514,7 +492,7 @@ router.get("/admin/my-apps/:id", requireAdmin, async (req, res) => {
     const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     res.json(toAdminAppJson(app));
-  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
 router.delete("/admin/my-apps/:id", requireAdmin, async (req, res) => {
@@ -524,43 +502,9 @@ router.delete("/admin/my-apps/:id", requireAdmin, async (req, res) => {
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     await stopApp(app.id);
     await db.delete(logs).where(eq(logs.appId, app.id));
-    await db.delete(deployments).where(eq(deployments.appId, app.id));
     await db.delete(apps).where(eq(apps.id, app.id));
-    deleteAppFiles(app.slug).catch(() => {});
     res.json({ message: "App deleted" });
-  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
-});
-
-router.put("/admin/my-apps/:id", requireAdmin, async (req, res) => {
-  try {
-    await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
-    if (!app) { res.status(404).json({ error: "App not found" }); return; }
-    const { name, branch, startCommand, installCommand, port, autoRestart, envVars } = req.body as {
-      name?: string; branch?: string; startCommand?: string; installCommand?: string;
-      port?: number | null; autoRestart?: boolean; envVars?: { key: string; value: string }[];
-    };
-    const update: Record<string, unknown> = { updatedAt: new Date() };
-    if (name !== undefined) update.name = name;
-    if (branch !== undefined) update.branch = branch;
-    if (startCommand !== undefined) update.startCommand = startCommand || null;
-    if (installCommand !== undefined) update.installCommand = installCommand || null;
-    if (port !== undefined) update.port = port ?? null;
-    if (autoRestart !== undefined) update.autoRestart = autoRestart;
-    if (envVars !== undefined) update.envVars = encryptEnvVars(envVars.filter((e) => e.key.trim()));
-    const [updated] = await db.update(apps).set(update as any).where(eq(apps.id, app.id)).returning();
-    res.json(toAdminAppJson(updated));
-  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
-});
-
-router.post("/admin/my-apps/:id/redeploy", requireAdmin, async (req, res) => {
-  try {
-    await connectDb();
-    const [app] = await db.select().from(apps).where(and(eq(apps.id, String(req.params.id)), eq(apps.ownerId, ADMIN_OWNER_ID))).limit(1);
-    if (!app) { res.status(404).json({ error: "App not found" }); return; }
-    restartApp(app.id).catch(() => {});
-    res.json({ message: "Redeploy initiated" });
-  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
 router.post("/admin/my-apps/:id/start", requireAdmin, async (req, res) => {
@@ -570,7 +514,7 @@ router.post("/admin/my-apps/:id/start", requireAdmin, async (req, res) => {
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     startApp(app.id).catch(() => {});
     res.json({ message: "Start initiated" });
-  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
 router.post("/admin/my-apps/:id/stop", requireAdmin, async (req, res) => {
@@ -580,7 +524,7 @@ router.post("/admin/my-apps/:id/stop", requireAdmin, async (req, res) => {
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     await stopApp(app.id);
     res.json({ message: "App stopped" });
-  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
 router.post("/admin/my-apps/:id/restart", requireAdmin, async (req, res) => {
@@ -590,7 +534,7 @@ router.post("/admin/my-apps/:id/restart", requireAdmin, async (req, res) => {
     if (!app) { res.status(404).json({ error: "App not found" }); return; }
     restartApp(app.id).catch(() => {});
     res.json({ message: "Restart initiated" });
-  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
 router.get("/admin/my-apps/:id/logs/stream", async (req, res) => {
@@ -615,20 +559,23 @@ router.get("/admin/my-apps/:id/logs/stream", async (req, res) => {
     const send = (data: unknown) => { res.write(`data: ${JSON.stringify(data)}\n\n`); flush(); };
 
     const sinceRaw = req.query.since as string | undefined;
-    const buf = getLogBuffer(app.id);
     if (sinceRaw) {
       const since = new Date(sinceRaw);
-      for (const log of buf) {
-        if (log.timestamp > since) send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
-      }
+      const gapLogs = await db.select().from(logs)
+        .where(and(eq(logs.appId, app.id), gt(logs.timestamp, since)))
+        .orderBy(desc(logs.timestamp)).limit(200);
+      for (const log of gapLogs) send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
     } else {
-      for (const log of buf) send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
+      const history = await db.select().from(logs)
+        .where(eq(logs.appId, app.id))
+        .orderBy(desc(logs.timestamp)).limit(100);
+      for (const log of history.reverse()) send({ line: log.line, stream: log.stream, timestamp: log.timestamp.toISOString() });
     }
 
     const unsubscribe = subscribeToLogs(app.id, (ev) => send({ line: ev.line, stream: ev.stream, timestamp: ev.timestamp.toISOString() }));
     const keepAlive = setInterval(() => { res.write(": ping\n\n"); flush(); }, 15000);
     req.on("close", () => { unsubscribe(); clearInterval(keepAlive); });
-  } catch (err) { const _msg = err instanceof Error ? err.message : String(err); req.log.error({ err, _msg }, "route error"); res.status(500).json({ error: _msg }); }
+  } catch (err) { req.log.error(err); res.status(500).json({ error: "Internal server error" }); }
 });
 
 router.patch("/admin/apps/:id/action", requireAdmin, async (req, res) => {
@@ -642,7 +589,7 @@ router.patch("/admin/apps/:id/action", requireAdmin, async (req, res) => {
     res.json({ id: app.id, status: updated?.status ?? app.status });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -665,7 +612,7 @@ router.get("/admin/revenue", requireAdmin, async (req, res) => {
     });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -675,7 +622,7 @@ router.post("/admin/settings/rawtest", requireAdmin, async (req, res) => {
   };
   const key = (consumerKey ?? "").trim();
   const secret = (consumerSecret ?? "").trim();
-  const prod = isProduction === true;
+  const prod = isProduction ?? false;
   const baseUrl = prod ? "https://pay.pesapal.com/v3" : "https://cybqa.pesapal.com/pesapalv3";
   const url = `${baseUrl}/api/Auth/RequestToken`;
   const payload = JSON.stringify({ consumer_key: key, consumer_secret: secret });
@@ -685,18 +632,8 @@ router.post("/admin/settings/rawtest", requireAdmin, async (req, res) => {
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: payload,
     });
-    const text = await resp.text();
-    let pesapalResponse: any = null;
-    try { pesapalResponse = JSON.parse(text); } catch { pesapalResponse = text; }
-    const gotToken = !!(pesapalResponse?.token);
-    res.json({
-      gotToken,
-      httpStatus: resp.status,
-      keyLength: key.length,
-      secretLength: secret.length,
-      requestPayload: payload,
-      pesapalResponse,
-    });
+    const data = await resp.json();
+    res.json({ ok: resp.ok, status: resp.status, data });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -706,22 +643,14 @@ router.get("/admin/settings", requireAdmin, async (req, res) => {
   try {
     await connectDb();
     const [settings] = await db.select().from(pesapalSettings).limit(1);
-    if (!settings) {
-      res.json({ consumerKey: "", consumerSecret: "", ipnId: "", isProduction: true, configured: false });
-      return;
-    }
+    if (!settings) { res.json({ consumerKey: "", consumerSecret: "", ipnId: "", isProduction: false }); return; }
     res.json({
-      id: settings.id,
-      consumerKey: settings.consumerKey,
-      // Never send the actual secret to the browser — just signal it is set
-      consumerSecret: settings.consumerSecret ? "••••••••" : "",
-      ipnId: settings.ipnId,
-      isProduction: settings.isProduction,
-      configured: !!(settings.consumerKey && settings.consumerSecret),
+      id: settings.id, consumerKey: settings.consumerKey, consumerSecret: settings.consumerSecret,
+      ipnId: settings.ipnId, isProduction: settings.isProduction,
     });
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -731,73 +660,22 @@ router.put("/admin/settings", requireAdmin, async (req, res) => {
     const { consumerKey, consumerSecret, isProduction } = req.body as {
       consumerKey: string; consumerSecret: string; isProduction?: boolean;
     };
-    const trimKey    = (consumerKey ?? "").trim();
-    const trimSecret = (consumerSecret ?? "").trim();
-    const prod = isProduction === true;
-
     const [existing] = await db.select().from(pesapalSettings).limit(1);
     if (existing) {
-      // If the secret field was left blank, preserve the existing stored secret.
-      // The UI shows "Leave blank to keep existing" — this actually honours that.
-      const secretToSave = trimSecret || existing.consumerSecret;
       const [updated] = await db.update(pesapalSettings)
-        .set({ consumerKey: trimKey, consumerSecret: secretToSave, isProduction: prod, updatedAt: new Date() })
+        .set({ consumerKey: consumerKey.trim(), consumerSecret: consumerSecret.trim(), isProduction: isProduction ?? false, updatedAt: new Date() })
         .where(eq(pesapalSettings.id, existing.id))
         .returning();
-      res.json({ id: updated.id, consumerKey: updated.consumerKey, isProduction: updated.isProduction, configured: true });
+      res.json({ id: updated.id, consumerKey: updated.consumerKey, isProduction: updated.isProduction });
     } else {
-      if (!trimKey || !trimSecret) {
-        res.status(400).json({ error: "Consumer Key and Consumer Secret are required for first-time setup." });
-        return;
-      }
       const [created] = await db.insert(pesapalSettings).values({
-        consumerKey: trimKey, consumerSecret: trimSecret, isProduction: prod,
+        consumerKey: consumerKey.trim(), consumerSecret: consumerSecret.trim(), isProduction: isProduction ?? false,
       }).returning();
-      res.json({ id: created.id, consumerKey: created.consumerKey, isProduction: created.isProduction, configured: true });
+      res.json({ id: created.id, consumerKey: created.consumerKey, isProduction: created.isProduction });
     }
   } catch (err) {
     req.log.error(err);
-    const _em = err instanceof Error ? err.message : String(err); req.log.error({ err, _em }, "route error"); res.status(500).json({ error: _em });
-  }
-});
-
-// Test credentials that are already saved in the database (no need to re-enter the secret)
-router.get("/admin/settings/test", requireAdmin, async (req, res) => {
-  try {
-    await connectDb();
-    const [settings] = await db.select().from(pesapalSettings).limit(1);
-    if (!settings?.consumerKey || !settings?.consumerSecret) {
-      res.json({ ok: false, message: "No PesaPal credentials saved yet. Enter your Consumer Key and Secret above, then save." });
-      return;
-    }
-    const prod = settings.isProduction === true;
-    const baseUrl = prod ? "https://pay.pesapal.com/v3" : "https://cybqa.pesapal.com/pesapalv3";
-    const url = `${baseUrl}/api/Auth/RequestToken`;
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ consumer_key: settings.consumerKey, consumer_secret: settings.consumerSecret }),
-    });
-    const text = await resp.text();
-    let pesapalResponse: any = null;
-    try { pesapalResponse = JSON.parse(text); } catch { pesapalResponse = text; }
-    const gotToken = !!(pesapalResponse?.token);
-    res.json({
-      ok: gotToken,
-      message: gotToken
-        ? `Connection successful! Authenticated with PesaPal ${prod ? "Production" : "Sandbox"}.`
-        : `PesaPal rejected the saved credentials (${prod ? "Production" : "Sandbox"}): ${pesapalResponse?.error?.message ?? pesapalResponse?.message ?? JSON.stringify(pesapalResponse).slice(0, 200)}`,
-      debug: {
-        source: "Saved in database",
-        environment: prod ? "Production" : "Sandbox",
-        httpStatus: resp.status,
-        keyLength: settings.consumerKey.length,
-        secretLength: settings.consumerSecret.length,
-        pesapalResponse,
-      },
-    });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, message: err.message ?? "Test failed" });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 

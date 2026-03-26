@@ -11,8 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
-import { Play, Square, RefreshCw, Trash2, Terminal, Settings, ArrowLeft, Loader2, Save, Trash, AlertCircle, Pencil, X, History, CheckCircle2, XCircle, Clock, GitBranch, GitCommit, Ban } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { Play, Square, RefreshCw, Trash2, Terminal, Settings, ArrowLeft, Loader2, Save, Trash, AlertCircle, Pencil, X } from "lucide-react";
 import { format } from "date-fns";
 import { clsx } from "clsx";
 
@@ -42,22 +41,6 @@ export default function AppDetail() {
   const { logs, clearLogs } = useLogStream(id!);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const [showAllCrashLogs, setShowAllCrashLogs] = useState(false);
-
-  const { data: deploymentHistory = [], isLoading: loadingDeployments } = useQuery({
-    queryKey: ["deployments", id],
-    queryFn: async () => {
-      const token = localStorage.getItem("access_token") ?? "";
-      const res = await fetch(`/api/apps/${id}/deployments`, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed to fetch deployments");
-      return res.json() as Promise<Array<{
-        id: string; status: string; branch: string; commitHash?: string;
-        startedAt: string; finishedAt?: string; durationMs?: number;
-        errorMessage?: string; triggeredBy: string;
-      }>>;
-    },
-    enabled: !!id && activeTab === "deployments",
-    refetchInterval: activeTab === "deployments" ? 6000 : false,
-  });
 
   const handleStart = () => {
     clearLogs();
@@ -204,7 +187,6 @@ export default function AppDetail() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="bg-card border border-border w-full justify-start h-12 rounded-xl mb-6">
           <TabsTrigger value="logs" className="gap-2 data-[state=active]:bg-background"><Terminal className="w-4 h-4" /> Console Logs</TabsTrigger>
-          <TabsTrigger value="deployments" className="gap-2 data-[state=active]:bg-background"><History className="w-4 h-4" /> Deployments</TabsTrigger>
           <TabsTrigger value="settings" className="gap-2 data-[state=active]:bg-background"><Settings className="w-4 h-4" /> Settings & Env</TabsTrigger>
         </TabsList>
 
@@ -320,85 +302,6 @@ export default function AppDetail() {
               </Card>
             </div>
           </div>
-        </TabsContent>
-
-        <TabsContent value="deployments" className="mt-0 outline-none">
-          <Card className="bg-card border border-border">
-            <div className="p-5 border-b border-border flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <History className="w-4 h-4 text-muted-foreground" />
-                <span className="font-medium">Deployment History</span>
-                <span className="text-xs text-muted-foreground">(last 50)</span>
-              </div>
-            </div>
-            {loadingDeployments ? (
-              <div className="flex items-center justify-center py-16">
-                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-              </div>
-            ) : deploymentHistory.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
-                <History className="w-8 h-8 text-muted-foreground/40" />
-                <p className="text-muted-foreground text-sm">No deployments yet. Deploy your app to see history here.</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-border">
-                {deploymentHistory.map((d, i) => {
-                  const isSuccess = d.status === "success";
-                  const isFailed = d.status === "failed";
-                  const isBuilding = d.status === "building";
-                  const isCancelled = d.status === "cancelled";
-                  const durationSec = d.durationMs != null ? (d.durationMs / 1000).toFixed(1) : null;
-                  return (
-                    <div key={d.id} className="flex items-start gap-4 p-4 hover:bg-muted/20 transition-colors">
-                      <div className="mt-0.5 shrink-0">
-                        {isSuccess && <CheckCircle2 className="w-5 h-5 text-green-500" />}
-                        {isFailed && <XCircle className="w-5 h-5 text-red-500" />}
-                        {isBuilding && <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />}
-                        {isCancelled && <Ban className="w-5 h-5 text-zinc-500" />}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={clsx("text-xs font-semibold uppercase tracking-wide", {
-                            "text-green-500": isSuccess,
-                            "text-red-500": isFailed,
-                            "text-blue-400": isBuilding,
-                            "text-zinc-400": isCancelled,
-                          })}>{d.status}</span>
-                          <span className="text-muted-foreground text-xs">·</span>
-                          <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                            <GitBranch className="w-3 h-3" />{d.branch}
-                          </span>
-                          {d.commitHash && (
-                            <>
-                              <span className="text-muted-foreground text-xs">·</span>
-                              <span className="flex items-center gap-1 text-xs text-muted-foreground font-mono">
-                                <GitCommit className="w-3 h-3" />{d.commitHash.slice(0, 7)}
-                              </span>
-                            </>
-                          )}
-                          {durationSec && (
-                            <>
-                              <span className="text-muted-foreground text-xs">·</span>
-                              <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                                <Clock className="w-3 h-3" />{durationSec}s
-                              </span>
-                            </>
-                          )}
-                        </div>
-                        {d.errorMessage && isFailed && (
-                          <p className="mt-1 text-xs text-red-400 font-mono truncate">{d.errorMessage}</p>
-                        )}
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {format(new Date(d.startedAt), "MMM d, yyyy · h:mm a")}
-                          {i === 0 && " (latest)"}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
         </TabsContent>
 
         <TabsContent value="settings" className="mt-0 outline-none">
