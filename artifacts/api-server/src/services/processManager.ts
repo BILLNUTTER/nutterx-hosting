@@ -88,7 +88,9 @@ async function findFreePort(): Promise<number> {
 
 function killPort(port: number): Promise<void> {
   return new Promise((resolve) => {
-    exec(`fuser -k ${port}/tcp 2>/dev/null; true`, () => resolve());
+    // fuser (Linux) → lsof (macOS/Render) → fallback: just continue
+    const cmd = `fuser -k ${port}/tcp 2>/dev/null || (lsof -ti:${port} 2>/dev/null | xargs kill -9 2>/dev/null); true`;
+    exec(cmd, () => resolve());
   });
 }
 
@@ -145,6 +147,124 @@ async function runCommand(cmd: string, args: string[], cwd: string, appId: strin
 
 function checkAbort(appId: string): boolean {
   return stopRequested.has(appId);
+}
+
+/** Shared helper: assign port, build env, spawn process, watch for crashes. */
+async function spawnProcess(app: App, appDir: string, pm: string): Promise<void> {
+  const appId = app.id;
+
+  // Assign / reuse port
+  let assignedPort = app.port ?? 0;
+  if (!assignedPort) {
+    assignedPort = await findFreePort();
+    await db.update(apps).set({ port: assignedPort, updatedAt: new Date() }).where(eq(apps.id, appId));
+  }
+  await killPort(assignedPort);
+  await writeLog(appId, `Assigned port: ${assignedPort}`, "system");
+
+  // Build runtime env — restore production NODE_ENV for the running app
+  const extraPaths = [NPM_GLOBAL_BIN, "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
+  const envVars: Record<string, string> = { ...process.env } as Record<string, string>;
+  envVars["PATH"] = `${extraPaths}:${envVars["PATH"] ?? ""}`;
+  for (const envVar of (app.envVars ?? [])) {
+    try { envVars[envVar.key] = decrypt(envVar.value); }
+    catch { envVars[envVar.key] = envVar.value; }
+  }
+  // PORT always wins — overrides anything in app env vars or process.env
+  envVars["PORT"] = String(assignedPort);
+
+  // Resolve start command
+  let startCmd = app.startCommand;
+  if (!startCmd) {
+    startCmd = existsSync(path.join(appDir, "package.json")) ? `${pm} start` : "node index.js";
+  }
+  const pm2Match = startCmd.trim().match(/^pm2\s+start\s+([\w./\\-]+(?:\.[cm]?js)?)\s*(.*)/i);
+  if (pm2Match) {
+    const script = pm2Match[1];
+    if (!script.includes("config.js") && !script.includes("ecosystem")) {
+      const oldCmd = startCmd;
+      startCmd = `node ${script}`;
+      await writeLog(appId, `Converted "${oldCmd}" → "${startCmd}" for proper process control`, "system");
+    }
+  }
+
+  const [startBin, ...startArgs] = startCmd.split(" ");
+  await writeLog(appId, `Starting app with: ${startCmd}`, "system");
+
+  // Mark running before spawning; retry once on transient DB blip
+  installingApps.delete(appId);
+  try {
+    await setStatus(appId, "running");
+  } catch {
+    await new Promise<void>((r) => setTimeout(r, 1500));
+    await setStatus(appId, "running");
+  }
+
+  const proc = spawn(startBin, startArgs, { cwd: appDir, env: envVars, shell: true });
+  const entry: RunningProcess = { process: proc, appId, restartCount: 0, stopped: false };
+  processes.set(appId, entry);
+
+  proc.stdout?.on("data", (d: Buffer) => { writeLog(appId, d.toString().trimEnd(), "stdout").catch(() => {}); });
+  proc.stderr?.on("data", (d: Buffer) => { writeLog(appId, d.toString().trimEnd(), "stderr").catch(() => {}); });
+
+  proc.on("close", async (code) => {
+    const current = processes.get(appId);
+    if (!current || current.stopped) {
+      await setStatus(appId, "stopped");
+      await writeLog(appId, `App stopped (exit code: ${code})`, "system");
+      processes.delete(appId);
+      return;
+    }
+    await writeLog(appId, `App crashed (exit code: ${code})`, "system");
+    const [freshApp] = await db.select({ autoRestart: apps.autoRestart }).from(apps).where(eq(apps.id, appId)).limit(1);
+    if (freshApp?.autoRestart && current.restartCount < 5) {
+      current.restartCount++;
+      await writeLog(appId, `Auto-restarting (attempt ${current.restartCount}/5)...`, "system");
+      processes.delete(appId);
+      setTimeout(() => {
+        startApp(appId).catch(async (e: Error) => {
+          await writeLog(appId, `Auto-restart failed: ${e.message}`, "system");
+          await setStatus(appId, "crashed");
+        });
+      }, 2000 * current.restartCount);
+    } else {
+      processes.delete(appId);
+      await setStatus(appId, "crashed");
+    }
+  });
+
+  proc.on("error", async (err) => {
+    await writeLog(appId, `Process error: ${err.message}`, "system");
+    await setStatus(appId, "error", err.message);
+    processes.delete(appId);
+  });
+}
+
+/**
+ * Quick-start: re-spawn an already-deployed app without re-cloning or re-installing.
+ * Falls back to a full startApp() if the app directory is missing or incomplete.
+ */
+async function quickStartApp(app: App): Promise<void> {
+  const appId = app.id;
+  const appDir = getAppDir(app.slug);
+
+  // Determine if the app is already on disk and installed
+  const hasPackageJson = existsSync(path.join(appDir, "package.json"));
+  const hasNodeModules = existsSync(path.join(appDir, "node_modules"));
+  const isReady = existsSync(appDir) && (!hasPackageJson || hasNodeModules);
+
+  if (!isReady) {
+    // Files missing — fall back to full deploy
+    await writeLog(appId, "App files not found — running full install...", "system");
+    return startApp(appId);
+  }
+
+  if (processes.has(appId) || installingApps.has(appId)) return;
+  stopRequested.delete(appId);
+
+  const pm = detectPackageManager(appDir);
+  await writeLog(appId, `Resuming app from existing deployment...`, "system");
+  await spawnProcess(app, appDir, pm);
 }
 
 export async function startApp(appId: string): Promise<void> {
@@ -209,15 +329,22 @@ export async function startApp(appId: string): Promise<void> {
     }
 
     const pythonPath = await getPythonPath();
+    // Augment PATH with common node/npm bin locations so install works on all hosts
+    const extraPaths = [
+      NPM_GLOBAL_BIN,
+      "/usr/local/bin", "/usr/bin", "/usr/local/lib/node_modules/.bin",
+    ].filter(Boolean).join(":");
     const installEnv: Record<string, string> = {
       ...(process.env as Record<string, string>),
+      // Force development so npm/pnpm/yarn install devDependencies even on Render
+      NODE_ENV: "development",
       npm_config_ignore_platform: "true",
       PNPM_IGNORE_PLATFORM: "true",
       npm_config_audit: "false",
       npm_config_fund: "false",
       npm_config_prefer_offline: "true",
+      PATH: `${extraPaths}:${process.env.PATH ?? ""}`,
       ...(pythonPath ? { npm_config_python: pythonPath, PYTHON: pythonPath } : {}),
-      ...(NPM_GLOBAL_BIN ? { PATH: `${NPM_GLOBAL_BIN}:${process.env.PATH ?? ""}` } : {}),
     };
 
     const [installBin, ...installArgs] = installCmd.split(" ");
@@ -235,93 +362,7 @@ export async function startApp(appId: string): Promise<void> {
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
-    // Assign a port: use the one saved on the app, or find a new free one
-    let assignedPort = app.port ?? 0;
-    if (!assignedPort) {
-      assignedPort = await findFreePort();
-      // Persist so restarts reuse the same port
-      await db.update(apps).set({ port: assignedPort, updatedAt: new Date() }).where(eq(apps.id, appId));
-    }
-    // Clear any stale process holding this port
-    await killPort(assignedPort);
-    await writeLog(appId, `Assigned port: ${assignedPort}`, "system");
-
-    const envVars: Record<string, string> = { ...process.env } as Record<string, string>;
-    if (NPM_GLOBAL_BIN) envVars["PATH"] = `${NPM_GLOBAL_BIN}:${envVars["PATH"] ?? ""}`;
-    for (const envVar of (app.envVars ?? [])) {
-      try { envVars[envVar.key] = decrypt(envVar.value); }
-      catch { envVars[envVar.key] = envVar.value; }
-    }
-    // Always inject PORT — overrides anything in app envVars or process.env
-    envVars["PORT"] = String(assignedPort);
-
-    let startCmd = app.startCommand;
-    if (!startCmd) {
-      startCmd = existsSync(path.join(appDir, "package.json")) ? `${pm} start` : "node index.js";
-    }
-
-    const pm2SimpleMatch = startCmd.trim().match(/^pm2\s+start\s+([\w./\\-]+(?:\.[cm]?js)?)\s*(.*)/i);
-    if (pm2SimpleMatch) {
-      const script = pm2SimpleMatch[1];
-      if (!script.includes("config.js") && !script.includes("ecosystem")) {
-        const oldCmd = startCmd;
-        startCmd = `node ${script}`;
-        await writeLog(appId, `Converted "${oldCmd}" → "${startCmd}" for proper process control`, "system");
-      }
-    }
-
-    const [startBin, ...startArgs] = startCmd.split(" ");
-    await writeLog(appId, `Starting app with: ${startCmd}`, "system");
-
-    // Mark running in DB before spawning. Retry once on transient DB failure.
-    installingApps.delete(appId);
-    try {
-      await setStatus(appId, "running");
-    } catch {
-      await new Promise<void>((r) => setTimeout(r, 1500));
-      await setStatus(appId, "running");
-    }
-
-    const proc = spawn(startBin, startArgs, { cwd: appDir, env: envVars, shell: true });
-    const entry: RunningProcess = { process: proc, appId, restartCount: 0, stopped: false };
-    processes.set(appId, entry);
-
-    proc.stdout?.on("data", (d: Buffer) => { writeLog(appId, d.toString().trimEnd(), "stdout").catch(() => {}); });
-    proc.stderr?.on("data", (d: Buffer) => { writeLog(appId, d.toString().trimEnd(), "stderr").catch(() => {}); });
-
-    proc.on("close", async (code) => {
-      const current = processes.get(appId);
-      if (!current || current.stopped) {
-        await setStatus(appId, "stopped");
-        await writeLog(appId, `App stopped (exit code: ${code})`, "system");
-        processes.delete(appId);
-        return;
-      }
-
-      await writeLog(appId, `App crashed (exit code: ${code})`, "system");
-
-      const [freshApp] = await db.select({ autoRestart: apps.autoRestart }).from(apps).where(eq(apps.id, appId)).limit(1);
-      if (freshApp?.autoRestart && current.restartCount < 5) {
-        current.restartCount++;
-        await writeLog(appId, `Auto-restarting (attempt ${current.restartCount}/5)...`, "system");
-        processes.delete(appId);
-        setTimeout(() => {
-          startApp(appId).catch(async (e) => {
-            await writeLog(appId, `Auto-restart failed: ${e.message}`, "system");
-            await setStatus(appId, "crashed");
-          });
-        }, 2000 * current.restartCount);
-      } else {
-        processes.delete(appId);
-        await setStatus(appId, "crashed");
-      }
-    });
-
-    proc.on("error", async (err) => {
-      await writeLog(appId, `Process error: ${err.message}`, "system");
-      await setStatus(appId, "error", err.message);
-      processes.delete(appId);
-    });
+    await spawnProcess(app, appDir, pm);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isCancelled = message === "Build cancelled by user";
@@ -394,7 +435,9 @@ export async function recoverApps(): Promise<void> {
       const app = staleApps[i];
       const delay = i * 3000;
       setTimeout(() => {
-        startApp(app.id).catch((err: Error) => {
+        // quickStartApp re-spawns from existing files (no clone/install) → status
+        // goes directly to "running" without ever showing "installing"
+        quickStartApp(app).catch((err: Error) => {
           console.error(`[recovery] Failed to restart ${app.slug}: ${err.message}`);
         });
       }, delay);
