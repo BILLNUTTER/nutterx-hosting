@@ -463,8 +463,12 @@ export default function AppDetail() {
                     <span className="text-foreground">{format(new Date(app.createdAt), 'PPP p')}</span>
                   </div>
                   <div>
-                    <span className="text-muted-foreground block mb-1">Port</span>
-                    <span className="text-foreground font-mono">{app.port || "Auto-detected"}</span>
+                    <span className="text-muted-foreground block mb-1">Assigned Port</span>
+                    <span className="text-foreground font-mono">
+                      {app.port
+                        ? <>{app.port} <span className="text-muted-foreground text-xs">(use <code className="bg-muted/40 px-1 rounded">process.env.PORT</code>)</span></>
+                        : <span className="text-muted-foreground text-xs italic">Assigned on first deploy</span>}
+                    </span>
                   </div>
                   <div>
                     <span className="text-muted-foreground block mb-1">Start Command</span>

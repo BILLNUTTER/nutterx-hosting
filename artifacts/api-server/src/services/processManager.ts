@@ -1,5 +1,6 @@
 import { spawn, exec, execSync, type ChildProcess } from "child_process";
 import { existsSync, mkdirSync, rm } from "fs";
+import net from "net";
 import path from "path";
 import os from "os";
 import { EventEmitter } from "events";
@@ -64,6 +65,31 @@ function getAppDir(slug: string): string {
 
 function removeDir(dir: string): Promise<void> {
   return new Promise((resolve) => { rm(dir, { recursive: true, force: true }, () => resolve()); });
+}
+
+const PORT_RANGE_START = 4000;
+const PORT_RANGE_END   = 5999;
+
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const s = net.createServer();
+    s.once("error", () => resolve(false));
+    s.once("listening", () => { s.close(() => resolve(true)); });
+    s.listen(port, "0.0.0.0");
+  });
+}
+
+async function findFreePort(): Promise<number> {
+  for (let p = PORT_RANGE_START; p <= PORT_RANGE_END; p++) {
+    if (await isPortFree(p)) return p;
+  }
+  throw new Error(`No free port found in range ${PORT_RANGE_START}–${PORT_RANGE_END}`);
+}
+
+function killPort(port: number): Promise<void> {
+  return new Promise((resolve) => {
+    exec(`fuser -k ${port}/tcp 2>/dev/null; true`, () => resolve());
+  });
 }
 
 async function writeLog(appId: string, line: string, stream: "stdout" | "stderr" | "system") {
@@ -209,14 +235,25 @@ export async function startApp(appId: string): Promise<void> {
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
+    // Assign a port: use the one saved on the app, or find a new free one
+    let assignedPort = app.port ?? 0;
+    if (!assignedPort) {
+      assignedPort = await findFreePort();
+      // Persist so restarts reuse the same port
+      await db.update(apps).set({ port: assignedPort, updatedAt: new Date() }).where(eq(apps.id, appId));
+    }
+    // Clear any stale process holding this port
+    await killPort(assignedPort);
+    await writeLog(appId, `Assigned port: ${assignedPort}`, "system");
+
     const envVars: Record<string, string> = { ...process.env } as Record<string, string>;
-    delete envVars["PORT"];
     if (NPM_GLOBAL_BIN) envVars["PATH"] = `${NPM_GLOBAL_BIN}:${envVars["PATH"] ?? ""}`;
     for (const envVar of (app.envVars ?? [])) {
       try { envVars[envVar.key] = decrypt(envVar.value); }
       catch { envVars[envVar.key] = envVar.value; }
     }
-    if (app.port) envVars["PORT"] = String(app.port);
+    // Always inject PORT — overrides anything in app envVars or process.env
+    envVars["PORT"] = String(assignedPort);
 
     let startCmd = app.startCommand;
     if (!startCmd) {
