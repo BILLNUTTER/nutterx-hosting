@@ -5,9 +5,23 @@ import { connectDb, db, apps, logs, deployments } from "@workspace/db";
 import type { App, Deployment } from "@workspace/db";
 import { requireAuth } from "../middlewares/auth.js";
 import { startApp, stopApp, restartApp, subscribeToLogs, getLogBuffer, deleteAppFiles } from "../services/processManager.js";
-import { encrypt, decrypt, isEncrypted } from "../lib/crypto.js";
+import { decrypt, isEncrypted } from "../lib/crypto.js";
 
 const router: IRouter = Router();
+
+// Env vars are stored as plaintext. This helper only exists for backward
+// compatibility — values saved before the encryption-removal migration may
+// still be in ciphertext form in the database. We silently decrypt those on
+// read so they appear correctly. Any re-save will write them as plaintext.
+function safeDecrypt(value: string): string {
+  if (!isEncrypted(value)) return value; // already plaintext — fast path
+  try { return decrypt(value); } catch { return value; }
+}
+
+// No-op wrapper kept for call-site compatibility. Stores values as plaintext.
+function encryptEnvVars(envVars: Array<{ key: string; value: string }>) {
+  return envVars; // plaintext — no encryption
+}
 
 function toApiApp(doc: App) {
   return {
@@ -27,28 +41,6 @@ function toApiApp(doc: App) {
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString(),
   };
-}
-
-function safeDecrypt(value: string): string {
-  try {
-    return decrypt(value);
-  } catch {
-    // If ENCRYPTION_KEY is missing or wrong the raw ciphertext is meaningless.
-    // Return "" so the UI shows a blank editable field instead of hex garbage.
-    if (isEncrypted(value)) return "";
-    return value;
-  }
-}
-
-function encryptEnvVars(envVars: Array<{ key: string; value: string }>) {
-  return envVars.map((e) => {
-    try {
-      return { key: e.key, value: encrypt(e.value) };
-    } catch {
-      // If ENCRYPTION_KEY is not set, store plaintext so the value is not lost.
-      return { key: e.key, value: e.value };
-    }
-  });
 }
 
 async function generateSlug(name: string): Promise<string> {

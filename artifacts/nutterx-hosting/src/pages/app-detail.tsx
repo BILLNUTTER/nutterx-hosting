@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
-import { Play, Square, RefreshCw, Trash2, Terminal, Settings, ArrowLeft, Loader2, Save, Trash, AlertCircle, AlertTriangle, Pencil, X, History, CheckCircle2, XCircle, Clock, GitBranch, GitCommit, Ban } from "lucide-react";
+import { Play, Square, RefreshCw, Trash2, Terminal, Settings, ArrowLeft, Loader2, Save, Trash, AlertCircle, Pencil, X, History, CheckCircle2, XCircle, Clock, GitBranch, GitCommit, Ban } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { clsx } from "clsx";
@@ -88,10 +88,6 @@ export default function AppDetail() {
     // Don't clobber the form while user is editing — they clicked Edit explicitly
     if (!isEditingEnv && app?.envVars) {
       setEnvForm(app.envVars);
-      // If any var has a non-empty key but empty value, decryption failed (key mismatch).
-      // Auto-open edit mode so the user can re-enter immediately.
-      const hasDecryptFailed = app.envVars.some(v => v.key.trim() && v.value === "");
-      if (hasDecryptFailed) setIsEditingEnv(true);
     }
   }, [app?.envVars, isEditingEnv]);
 
@@ -444,18 +440,6 @@ export default function AppDetail() {
                   </div>
                 )}
 
-                {(() => {
-                  const missingCount = envForm.filter(v => v.key.trim() && v.value === "").length;
-                  return missingCount > 0 ? (
-                    <div className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2.5 mb-2">
-                      <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                      <span className="leading-relaxed">
-                        <strong>{missingCount} variable{missingCount > 1 ? "s" : ""} need re-entry</strong> — they were encrypted with a different key and couldn't be decrypted. Enter new values below and save to fix this. Your app won't receive these vars until you do.
-                      </span>
-                    </div>
-                  ) : null;
-                })()}
-
                 {!isEditingEnv ? (
                   /* Read-only view */
                   <div className="space-y-2">
@@ -476,28 +460,25 @@ export default function AppDetail() {
                 ) : (
                   /* Edit mode */
                   <div className="space-y-3">
-                    {envForm.map((ev, i) => {
-                      const needsReentry = ev.key.trim() && ev.value === "";
-                      return (
-                        <div key={i} className="flex items-start gap-3">
-                          <Input
-                            placeholder="KEY"
-                            value={ev.key}
-                            onChange={e => { const n = [...envForm]; n[i] = { ...n[i], key: e.target.value }; setEnvForm(n); }}
-                            className="font-mono text-sm bg-black/20 flex-1"
-                          />
-                          <Input
-                            placeholder={needsReentry ? "⚠ Enter new value" : "VALUE"}
-                            value={ev.value}
-                            onChange={e => { const n = [...envForm]; n[i] = { ...n[i], value: e.target.value }; setEnvForm(n); }}
-                            className={clsx("font-mono text-sm bg-black/20 flex-[2]", needsReentry && "border-amber-500/60 placeholder:text-amber-500/60")}
-                          />
-                          <Button variant="ghost" size="icon" onClick={() => setEnvForm(envForm.filter((_, idx) => idx !== i))} className="text-muted-foreground hover:text-destructive flex-shrink-0">
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      );
-                    })}
+                    {envForm.map((ev, i) => (
+                      <div key={i} className="flex items-start gap-3">
+                        <Input
+                          placeholder="KEY"
+                          value={ev.key}
+                          onChange={e => { const n = [...envForm]; n[i] = { ...n[i], key: e.target.value }; setEnvForm(n); }}
+                          className="font-mono text-sm bg-black/20 flex-1"
+                        />
+                        <Input
+                          placeholder="VALUE"
+                          value={ev.value}
+                          onChange={e => { const n = [...envForm]; n[i] = { ...n[i], value: e.target.value }; setEnvForm(n); }}
+                          className="font-mono text-sm bg-black/20 flex-[2]"
+                        />
+                        <Button variant="ghost" size="icon" onClick={() => setEnvForm(envForm.filter((_, idx) => idx !== i))} className="text-muted-foreground hover:text-destructive flex-shrink-0">
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ))}
                     <Button variant="outline" onClick={() => setEnvForm([...envForm, { key: "", value: "" }])} className="w-full border-dashed mt-2">
                       + Add Variable
                     </Button>

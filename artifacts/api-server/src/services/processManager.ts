@@ -365,16 +365,12 @@ export async function startApp(appId: string): Promise<void> {
     delete envVars["PORT"];
     if (NPM_GLOBAL_BIN) envVars["PATH"] = `${NPM_GLOBAL_BIN}:${envVars["PATH"] ?? ""}`;
     for (const envVar of (app.envVars ?? [])) {
-      try {
-        envVars[envVar.key] = decrypt(envVar.value);
-      } catch {
-        // If decryption fails and the value looks like ciphertext, skip it
-        // rather than injecting hex garbage into the app's environment.
-        if (!isEncrypted(envVar.value)) {
-          envVars[envVar.key] = envVar.value; // plaintext stored (no encryption key at save time)
-        } else {
-          writeLog(appId, `⚠️  Could not decrypt env var "${envVar.key}" — ENCRYPTION_KEY mismatch? Skipping.`, "system");
-        }
+      // Env vars are stored as plaintext. Backward-compat: decrypt values that
+      // were saved before the encryption-removal migration.
+      if (isEncrypted(envVar.value)) {
+        try { envVars[envVar.key] = decrypt(envVar.value); } catch { /* skip corrupted legacy var */ }
+      } else {
+        envVars[envVar.key] = envVar.value;
       }
     }
     if (app.port) envVars["PORT"] = String(app.port);
