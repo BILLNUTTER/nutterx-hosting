@@ -300,42 +300,44 @@ export async function startApp(appId: string): Promise<void> {
       ...(NPM_GLOBAL_BIN ? { PATH: `${NPM_GLOBAL_BIN}:${process.env.PATH ?? ""}` } : {}),
     };
 
-    // Two-stage install strategy:
-    //  Stage 1 — normal install, 4-min timeout. Covers most apps cleanly.
-    //  Stage 2 — if stage 1 times out OR fails: switch to npm install --ignore-scripts
-    //            (skips ALL postinstall/preinstall hooks — the #1 cause of hung installs
-    //            on Render where node-gyp / puppeteer / canvas compilation stalls forever).
-    //            8-min timeout for stage 2.
-    const INSTALL_TIMEOUT_1  = 4 * 60_000;   // stage 1: 4 min
-    const INSTALL_TIMEOUT_2  = 8 * 60_000;   // stage 2: 8 min
+    // Install strategy — two stages, fast path first:
+    //
+    //  Stage 1: --ignore-scripts  (PRIMARY, 6-min timeout)
+    //    Skips ALL postinstall/preinstall/native-build hooks.
+    //    These hooks are the #1 cause of hung installs on limited servers
+    //    (node-gyp, canvas, puppeteer, native addons that compile forever).
+    //    Pure JS download — cannot stall. Works for 95%+ of apps.
+    //
+    //  Stage 2: normal install  (FALLBACK, 6-min timeout)
+    //    Only runs if stage 1 fails (e.g. package requires a build script
+    //    to generate files that the app imports at startup).
+    //    If your app needs a build step (TypeScript, Prisma) set a custom
+    //    install command like "npm install && npm run build".
+    const INSTALL_TIMEOUT    = 6 * 60_000;
     const HEARTBEAT_INTERVAL = 30_000;
 
-    // Build the stage-2 fallback args once: "npm install --ignore-scripts ..."
     const [installBin, ...installArgs] = installCmd.split(" ");
-    const fallbackArgs = installArgs
-      .map(a => a === "ci" ? "install" : a)   // npm ci → npm install (lenient lockfile)
+
+    // Stage-1 args: ensure --ignore-scripts, replace ci→install (ci is strict)
+    const fastArgs = installArgs
+      .map(a => a === "ci" ? "install" : a)
       .filter(a => a !== "--ignore-scripts");
-    fallbackArgs.push("--ignore-scripts");
+    fastArgs.push("--ignore-scripts");
 
-    writeLog(appId, `Installing dependencies with: ${installCmd}`, "system");
+    writeLog(appId, `Installing dependencies (fast path — skipping scripts)...`, "system");
+    writeLog(appId, `Running: ${installBin} ${fastArgs.join(" ")}`, "system");
     try {
-      await runCommand(installBin, installArgs, appDir, appId, installEnv, INSTALL_TIMEOUT_1, HEARTBEAT_INTERVAL);
+      await runCommand(installBin, fastArgs, appDir, appId, installEnv, INSTALL_TIMEOUT, HEARTBEAT_INTERVAL);
       writeLog(appId, `✅ Dependencies installed successfully.`, "system");
-    } catch (installErr) {
-      const isTimeout = (installErr as { timedOut?: boolean }).timedOut === true;
-      const errMsg    = installErr instanceof Error ? installErr.message : String(installErr);
-
-      if (isTimeout) {
-        writeLog(appId, `⏱ Install timed out after 4 minutes — a postinstall script is likely stuck.`, "stderr");
-      } else {
-        writeLog(appId, `Install failed: ${errMsg}`, "stderr");
-      }
-
-      // Stage 2: retry without any scripts (fast — only downloads JS files)
-      writeLog(appId, `Retrying with --ignore-scripts (skips native builds & postinstall)...`, "system");
+    } catch (fastErr) {
+      const fastMsg = fastErr instanceof Error ? fastErr.message : String(fastErr);
+      writeLog(appId, `Fast install failed (${fastMsg}) — retrying with full install...`, "stderr");
       await removeDir(path.join(appDir, "node_modules")).catch(() => {});
-      await runCommand(installBin, fallbackArgs, appDir, appId, installEnv, INSTALL_TIMEOUT_2, HEARTBEAT_INTERVAL);
-      writeLog(appId, `✅ Dependencies installed (postinstall scripts skipped).`, "system");
+
+      // Stage-2: normal install with scripts (needed for some packages)
+      writeLog(appId, `Running: ${installBin} ${installArgs.join(" ")}`, "system");
+      await runCommand(installBin, installArgs, appDir, appId, installEnv, INSTALL_TIMEOUT, HEARTBEAT_INTERVAL);
+      writeLog(appId, `✅ Dependencies installed (with scripts).`, "system");
     }
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
