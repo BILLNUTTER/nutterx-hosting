@@ -340,6 +340,25 @@ export async function startApp(appId: string): Promise<void> {
       writeLog(appId, `✅ Dependencies installed (with scripts).`, "system");
     }
 
+    // After --ignore-scripts install, run npm rebuild to download pre-built native
+    // binaries (e.g. sharp, canvas, bcrypt). These are NOT compilations — they just
+    // fetch a pre-built .node file from GitHub releases (takes < 30s).
+    // We use a short timeout so that any package that tries to COMPILE from source
+    // (slow) is killed before it can block the deploy.
+    if (installBin === "npm") {
+      writeLog(appId, `Rebuilding native modules (sharp, bcrypt, etc.)...`, "system");
+      try {
+        await runCommand("npm", ["rebuild"], appDir, appId, installEnv, 90_000);
+        writeLog(appId, `✅ Native modules rebuilt.`, "system");
+      } catch {
+        // Non-fatal: native rebuild failed (compilation attempted, timed out, etc.)
+        // The app may still work if it doesn't use native modules at runtime.
+        writeLog(appId, `⚠️  Native module rebuild timed out or failed — continuing anyway.`, "system");
+        writeLog(appId, `   If your app uses sharp/canvas/bcrypt, set a custom install command:`, "system");
+        writeLog(appId, `   npm install && npm rebuild sharp`, "system");
+      }
+    }
+
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
     const envVars: Record<string, string> = { ...process.env } as Record<string, string>;
