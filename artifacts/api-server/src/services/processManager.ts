@@ -300,41 +300,41 @@ export async function startApp(appId: string): Promise<void> {
       ...(NPM_GLOBAL_BIN ? { PATH: `${NPM_GLOBAL_BIN}:${process.env.PATH ?? ""}` } : {}),
     };
 
-    // 15-minute install timeout. Heavy bots (baileys + 500 deps) typically finish
-    // in 5-8 min. Heartbeat every 30s so the log stream doesn't look frozen.
-    const INSTALL_TIMEOUT    = 15 * 60_000;
+    // Two-stage install strategy:
+    //  Stage 1 — normal install, 4-min timeout. Covers most apps cleanly.
+    //  Stage 2 — if stage 1 times out OR fails: switch to npm install --ignore-scripts
+    //            (skips ALL postinstall/preinstall hooks — the #1 cause of hung installs
+    //            on Render where node-gyp / puppeteer / canvas compilation stalls forever).
+    //            8-min timeout for stage 2.
+    const INSTALL_TIMEOUT_1  = 4 * 60_000;   // stage 1: 4 min
+    const INSTALL_TIMEOUT_2  = 8 * 60_000;   // stage 2: 8 min
     const HEARTBEAT_INTERVAL = 30_000;
 
+    // Build the stage-2 fallback args once: "npm install --ignore-scripts ..."
     const [installBin, ...installArgs] = installCmd.split(" ");
+    const fallbackArgs = installArgs
+      .map(a => a === "ci" ? "install" : a)   // npm ci → npm install (lenient lockfile)
+      .filter(a => a !== "--ignore-scripts");
+    fallbackArgs.push("--ignore-scripts");
+
     writeLog(appId, `Installing dependencies with: ${installCmd}`, "system");
     try {
-      await runCommand(installBin, installArgs, appDir, appId, installEnv, INSTALL_TIMEOUT, HEARTBEAT_INTERVAL);
+      await runCommand(installBin, installArgs, appDir, appId, installEnv, INSTALL_TIMEOUT_1, HEARTBEAT_INTERVAL);
       writeLog(appId, `✅ Dependencies installed successfully.`, "system");
     } catch (installErr) {
       const isTimeout = (installErr as { timedOut?: boolean }).timedOut === true;
-      const errMsg = installErr instanceof Error ? installErr.message : String(installErr);
+      const errMsg    = installErr instanceof Error ? installErr.message : String(installErr);
 
       if (isTimeout) {
-        // No point retrying — if 15 min wasn't enough, another 15 won't be.
-        // Clean up partially-written node_modules so next deploy starts fresh.
-        writeLog(appId, `Install timed out after 15 minutes. Cleaning up for next attempt...`, "stderr");
-        await removeDir(path.join(appDir, "node_modules")).catch(() => {});
-        throw new Error("Dependency installation timed out after 15 minutes. The app may have too many packages. Try setting a custom install command in the app settings.");
+        writeLog(appId, `⏱ Install timed out after 4 minutes — a postinstall script is likely stuck.`, "stderr");
+      } else {
+        writeLog(appId, `Install failed: ${errMsg}`, "stderr");
       }
 
-      // Non-timeout failure: retry with npm install (not npm ci — ci is strict about
-      // lockfile sync and fails on mismatches; install is lenient) + skip postinstall.
-      writeLog(appId, `Install failed: ${errMsg}`, "stderr");
-      writeLog(appId, `Retrying with npm install --ignore-scripts...`, "system");
+      // Stage 2: retry without any scripts (fast — only downloads JS files)
+      writeLog(appId, `Retrying with --ignore-scripts (skips native builds & postinstall)...`, "system");
       await removeDir(path.join(appDir, "node_modules")).catch(() => {});
-
-      // Always use "npm install" for the retry regardless of what the first attempt was.
-      // Replace "ci" sub-command with "install" so npm stops enforcing lockfile purity.
-      const fallbackArgs = installArgs
-        .map(a => a === "ci" ? "install" : a)
-        .filter(a => a !== "--ignore-scripts");
-      fallbackArgs.push("--ignore-scripts");
-      await runCommand(installBin, fallbackArgs, appDir, appId, installEnv, INSTALL_TIMEOUT, HEARTBEAT_INTERVAL);
+      await runCommand(installBin, fallbackArgs, appDir, appId, installEnv, INSTALL_TIMEOUT_2, HEARTBEAT_INTERVAL);
       writeLog(appId, `✅ Dependencies installed (postinstall scripts skipped).`, "system");
     }
 
