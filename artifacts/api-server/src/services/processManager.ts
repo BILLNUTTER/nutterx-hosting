@@ -1,5 +1,5 @@
 import { spawn, exec, execSync, type ChildProcess } from "child_process";
-import { existsSync, mkdirSync, rm } from "fs";
+import { existsSync, mkdirSync, rm, rename } from "fs";
 import path from "path";
 import os from "os";
 import { EventEmitter } from "events";
@@ -212,12 +212,32 @@ export async function startApp(appId: string): Promise<void> {
       ? app.repoUrl.replace("https://", `https://${app.pat}@`)
       : app.repoUrl;
 
-    // Always do a fresh clone — avoids stale .git state causing git fetch to
-    // hang for minutes before timing out. The shared npm cache (~/.nutterx-npm-cache)
-    // is the real speed win: packages only download from the internet once.
+    // Fresh clone every time — avoids stale .git state causing git fetch to hang.
+    // But RESCUE node_modules first: rename them out, restore after clone so that
+    // npm only installs what changed (massive speed boost on Render / cold disk).
+    const nmDir    = path.join(appDir, "node_modules");
+    const nmBackup = path.join(os.tmpdir(), `nutterx-nm-${app.slug}`);
+    const hasNm    = existsSync(nmDir);
+    if (hasNm) {
+      try {
+        // Remove any stale backup then atomically move current node_modules out
+        await removeDir(nmBackup);
+        await new Promise<void>((res, rej) => rename(nmDir, nmBackup, e => e ? rej(e) : res()));
+        writeLog(appId, `📦 Saved node_modules cache for faster reinstall.`, "system");
+      } catch { /* non-fatal — just do a full install */ }
+    }
+
     writeLog(appId, `Cloning repository: ${app.repoUrl} (branch: ${branch})`, "system");
     await removeDir(appDir);
     await runCommand("git", ["clone", "--depth", "1", "--branch", branch, "--single-branch", cloneUrl, appDir], os.homedir(), appId, undefined, 3 * 60_000);
+
+    // Restore node_modules from backup so npm does an incremental install
+    if (existsSync(nmBackup)) {
+      try {
+        await new Promise<void>((res, rej) => rename(nmBackup, nmDir, e => e ? rej(e) : res()));
+        writeLog(appId, `📦 Restored node_modules cache.`, "system");
+      } catch { /* non-fatal — npm will do a full install */ }
+    }
 
     // Capture commit hash, then remove git history (not needed at runtime)
     try {
@@ -244,21 +264,20 @@ export async function startApp(appId: string): Promise<void> {
     );
 
     // Append speed flags without overriding anything the user already set.
-    // --no-optional skips optionalDependencies (e.g. canvas, sharp in baileys)
-    // which are the #1 cause of slow native-compilation stalls on limited servers.
+    // --no-optional skips heavy native builds (canvas, sharp, bufferutil in baileys).
+    // --prefer-offline is intentionally omitted: on a cold disk it forces an extra
+    // offline-cache lookup that finds nothing, then downloads anyway — pure overhead.
+    // npm_config_cache below already routes downloads through the shared local cache.
     if (/^\s*npm(\s|$)/.test(installCmd)) {
       if (!/--ignore-platform/.test(installCmd))   installCmd += " --ignore-platform";
       if (!/--no-audit/.test(installCmd))          installCmd += " --no-audit";
       if (!/--no-fund/.test(installCmd))           installCmd += " --no-fund";
-      if (!/--prefer-offline/.test(installCmd))    installCmd += " --prefer-offline";
       if (!/--no-optional/.test(installCmd))       installCmd += " --no-optional";
       if (!/--legacy-peer-deps/.test(installCmd))  installCmd += " --legacy-peer-deps";
     } else if (/^\s*pnpm(\s|$)/.test(installCmd)) {
       if (!/--ignore-platform/.test(installCmd))   installCmd += " --ignore-platform";
-      if (!/--prefer-offline/.test(installCmd))    installCmd += " --prefer-offline";
       if (hasPnpmLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
     } else if (/^\s*yarn(\s|$)/.test(installCmd)) {
-      if (!/--prefer-offline/.test(installCmd))    installCmd += " --prefer-offline";
       if (hasYarnLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
     }
 
