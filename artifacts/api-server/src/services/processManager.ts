@@ -264,18 +264,13 @@ export async function startApp(appId: string): Promise<void> {
     );
 
     // Append speed flags without overriding anything the user already set.
-    // --no-optional skips heavy native builds (canvas, sharp, bufferutil in baileys).
-    // --prefer-offline is intentionally omitted: on a cold disk it forces an extra
-    // offline-cache lookup that finds nothing, then downloads anyway — pure overhead.
-    // npm_config_cache below already routes downloads through the shared local cache.
+    // We use a standard install (no --ignore-scripts, no --no-optional) so all
+    // packages and their postinstall hooks run normally — just like a local install.
     if (/^\s*npm(\s|$)/.test(installCmd)) {
-      if (!/--ignore-platform/.test(installCmd))   installCmd += " --ignore-platform";
-      if (!/--no-audit/.test(installCmd))          installCmd += " --no-audit";
-      if (!/--no-fund/.test(installCmd))           installCmd += " --no-fund";
-      if (!/--no-optional/.test(installCmd))       installCmd += " --no-optional";
-      if (!/--legacy-peer-deps/.test(installCmd))  installCmd += " --legacy-peer-deps";
+      if (!/--no-audit/.test(installCmd))         installCmd += " --no-audit";
+      if (!/--no-fund/.test(installCmd))          installCmd += " --no-fund";
+      if (!/--legacy-peer-deps/.test(installCmd)) installCmd += " --legacy-peer-deps";
     } else if (/^\s*pnpm(\s|$)/.test(installCmd)) {
-      if (!/--ignore-platform/.test(installCmd))   installCmd += " --ignore-platform";
       if (hasPnpmLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
     } else if (/^\s*yarn(\s|$)/.test(installCmd)) {
       if (hasYarnLock && !/--frozen-lockfile/.test(installCmd)) installCmd += " --frozen-lockfile";
@@ -300,64 +295,17 @@ export async function startApp(appId: string): Promise<void> {
       ...(NPM_GLOBAL_BIN ? { PATH: `${NPM_GLOBAL_BIN}:${process.env.PATH ?? ""}` } : {}),
     };
 
-    // Install strategy — two stages, fast path first:
-    //
-    //  Stage 1: --ignore-scripts  (PRIMARY, 6-min timeout)
-    //    Skips ALL postinstall/preinstall/native-build hooks.
-    //    These hooks are the #1 cause of hung installs on limited servers
-    //    (node-gyp, canvas, puppeteer, native addons that compile forever).
-    //    Pure JS download — cannot stall. Works for 95%+ of apps.
-    //
-    //  Stage 2: normal install  (FALLBACK, 6-min timeout)
-    //    Only runs if stage 1 fails (e.g. package requires a build script
-    //    to generate files that the app imports at startup).
-    //    If your app needs a build step (TypeScript, Prisma) set a custom
-    //    install command like "npm install && npm run build".
-    const INSTALL_TIMEOUT    = 6 * 60_000;
+    // Standard install — all packages, all postinstall hooks, 10-minute timeout.
+    // Uses the shared npm cache so repeat deploys are fast (packages already cached).
+    const INSTALL_TIMEOUT    = 10 * 60_000;
     const HEARTBEAT_INTERVAL = 30_000;
 
     const [installBin, ...installArgs] = installCmd.split(" ");
 
-    // Stage-1 args: ensure --ignore-scripts, replace ci→install (ci is strict)
-    const fastArgs = installArgs
-      .map(a => a === "ci" ? "install" : a)
-      .filter(a => a !== "--ignore-scripts");
-    fastArgs.push("--ignore-scripts");
-
-    writeLog(appId, `Installing dependencies (fast path — skipping scripts)...`, "system");
-    writeLog(appId, `Running: ${installBin} ${fastArgs.join(" ")}`, "system");
-    try {
-      await runCommand(installBin, fastArgs, appDir, appId, installEnv, INSTALL_TIMEOUT, HEARTBEAT_INTERVAL);
-      writeLog(appId, `✅ Dependencies installed successfully.`, "system");
-    } catch (fastErr) {
-      const fastMsg = fastErr instanceof Error ? fastErr.message : String(fastErr);
-      writeLog(appId, `Fast install failed (${fastMsg}) — retrying with full install...`, "stderr");
-      await removeDir(path.join(appDir, "node_modules")).catch(() => {});
-
-      // Stage-2: normal install with scripts (needed for some packages)
-      writeLog(appId, `Running: ${installBin} ${installArgs.join(" ")}`, "system");
-      await runCommand(installBin, installArgs, appDir, appId, installEnv, INSTALL_TIMEOUT, HEARTBEAT_INTERVAL);
-      writeLog(appId, `✅ Dependencies installed (with scripts).`, "system");
-    }
-
-    // After --ignore-scripts install, run npm rebuild to download pre-built native
-    // binaries (e.g. sharp, canvas, bcrypt). These are NOT compilations — they just
-    // fetch a pre-built .node file from GitHub releases (takes < 30s).
-    // We use a short timeout so that any package that tries to COMPILE from source
-    // (slow) is killed before it can block the deploy.
-    if (installBin === "npm") {
-      writeLog(appId, `Rebuilding native modules (sharp, bcrypt, etc.)...`, "system");
-      try {
-        await runCommand("npm", ["rebuild"], appDir, appId, installEnv, 90_000);
-        writeLog(appId, `✅ Native modules rebuilt.`, "system");
-      } catch {
-        // Non-fatal: native rebuild failed (compilation attempted, timed out, etc.)
-        // The app may still work if it doesn't use native modules at runtime.
-        writeLog(appId, `⚠️  Native module rebuild timed out or failed — continuing anyway.`, "system");
-        writeLog(appId, `   If your app uses sharp/canvas/bcrypt, set a custom install command:`, "system");
-        writeLog(appId, `   npm install && npm rebuild sharp`, "system");
-      }
-    }
+    writeLog(appId, `Installing dependencies...`, "system");
+    writeLog(appId, `Running: ${installBin} ${installArgs.join(" ")}`, "system");
+    await runCommand(installBin, installArgs, appDir, appId, installEnv, INSTALL_TIMEOUT, HEARTBEAT_INTERVAL);
+    writeLog(appId, `✅ Dependencies installed successfully.`, "system");
 
     if (checkAbort(appId)) throw new Error("Build cancelled by user");
 
