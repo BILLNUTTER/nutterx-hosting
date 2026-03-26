@@ -122,10 +122,8 @@ export default function Admin() {
   const adminLogEndRef = useRef<HTMLDivElement>(null);
   const adminEsRef = useRef<EventSource | null>(null);
 
-  // Unified deploy wizard (used for both "for user" and "admin own apps")
-  type WizardTarget = { kind: "user"; userId: string; email: string } | { kind: "admin" };
+  // Deploy wizard (admin own apps only)
   const [wizardOpen, setWizardOpen] = useState(false);
-  const [wizardTarget, setWizardTarget] = useState<WizardTarget | null>(null);
   const [wizardStep, setWizardStep] = useState(1);
   const [wName, setWName] = useState("");
   const [wRepoUrl, setWRepoUrl] = useState("");
@@ -295,19 +293,12 @@ export default function Admin() {
     setWIsFetchingMeta(false); setWIsFetchingEnv(false); setWIsDeploying(false);
   };
 
-  const openWizardForUser = (userId: string, email: string) => {
+  const openWizard = () => {
     resetWizard();
-    setWizardTarget({ kind: "user", userId, email });
     setWizardOpen(true);
   };
 
-  const openWizardForAdmin = () => {
-    resetWizard();
-    setWizardTarget({ kind: "admin" });
-    setWizardOpen(true);
-  };
-
-  const closeWizard = () => { setWizardOpen(false); setWizardTarget(null); resetWizard(); };
+  const closeWizard = () => { setWizardOpen(false); resetWizard(); };
 
   const wFetchMeta = async (silent = false) => {
     if (!wRepoUrl) return;
@@ -366,42 +357,23 @@ export default function Admin() {
   };
 
   const handleWizardDeploy = async () => {
-    if (!wizardTarget) return;
     setWIsDeploying(true);
     const validEnvVars = wEnvVars.filter((e) => e.key.trim());
     try {
-      if (wizardTarget.kind === "user") {
-        const res = await adminFetch(`/api/admin/users/${wizardTarget.userId}/apps`, {
-          method: "POST",
-          body: JSON.stringify({
-            name: wName, repoUrl: wRepoUrl, branch: wBranch || "main",
-            startCommand: wStartCmd || undefined, installCommand: wInstallCmd || undefined,
-            envVars: validEnvVars, autoRestart: false,
-          }),
-        });
-        if (!res.ok) throw new Error((await res.json()).error);
-        const app = await res.json();
-        setUserApps((prev) => {
-          const uid = wizardTarget.userId;
-          return { ...prev, [uid]: [{ id: app.id, name: wName, slug: app.slug, repoUrl: wRepoUrl, status: "installing" }, ...(prev[uid] ?? [])] };
-        });
-        toast({ title: "App deployed", description: `${wName} is being deployed for ${wizardTarget.email}.` });
-      } else {
-        const res = await adminFetch("/api/admin/my-apps", {
-          method: "POST",
-          body: JSON.stringify({
-            name: wName, repoUrl: wRepoUrl, branch: wBranch || "main",
-            startCommand: wStartCmd || undefined, installCommand: wInstallCmd || undefined,
-            envVars: validEnvVars,
-          }),
-        });
-        if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
-        const app = await res.json();
-        setAdminApps((prev) => [app, ...prev]);
-        setSelectedAdminAppId(app.id);
-        openAdminLogs(app.id);
-        toast({ title: "App deploying", description: `${wName} is being cloned and started.` });
-      }
+      const res = await adminFetch("/api/admin/my-apps", {
+        method: "POST",
+        body: JSON.stringify({
+          name: wName, repoUrl: wRepoUrl, branch: wBranch || "main",
+          startCommand: wStartCmd || undefined, installCommand: wInstallCmd || undefined,
+          envVars: validEnvVars,
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
+      const app = await res.json();
+      setAdminApps((prev) => [app, ...prev]);
+      setSelectedAdminAppId(app.id);
+      openAdminLogs(app.id);
+      toast({ title: "App deploying", description: `${wName} is being cloned and started.` });
       closeWizard();
     } catch (err: any) {
       toast({ title: "Deployment failed", description: err.message, variant: "destructive" });
@@ -766,14 +738,6 @@ export default function Admin() {
                                     Deactivate Sub
                                   </Button>
                                 )}
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 text-xs gap-1.5"
-                                  onClick={() => openWizardForUser(user.id, user.email)}
-                                >
-                                  <Plus className="w-3.5 h-3.5" /> Deploy App for User
-                                </Button>
                               </div>
                             </div>
 
@@ -936,7 +900,7 @@ export default function Admin() {
               {/* Left column: app list + create form */}
               <div className="space-y-4">
                 {/* New App button */}
-                <Button className="w-full gap-2" onClick={openWizardForAdmin}>
+                <Button className="w-full gap-2" onClick={openWizard}>
                   <Plus className="w-4 h-4" /> Deploy New App
                 </Button>
 
@@ -1235,11 +1199,7 @@ export default function Admin() {
           <DialogHeader>
             <div className="flex items-center gap-2">
               <Wand2 className="w-5 h-5 text-primary" />
-              <DialogTitle>
-                {wizardTarget?.kind === "user"
-                  ? `Deploy for ${wizardTarget.email}`
-                  : "Deploy New App"}
-              </DialogTitle>
+              <DialogTitle>Deploy New App</DialogTitle>
             </div>
             <DialogDescription>
               {wizardStep === 1 && "Configure the repository and runtime commands."}
@@ -1388,7 +1348,6 @@ export default function Admin() {
                 <h3 className="font-bold text-base">Ready for Liftoff</h3>
                 <p className="text-xs text-muted-foreground mt-1">
                   <strong>{wName}</strong> will be cloned, built, and launched automatically.
-                  {wizardTarget?.kind === "user" && <> App will be owned by <strong>{wizardTarget.email}</strong>.</>}
                 </p>
               </div>
               <div className="bg-black/30 border border-border rounded-xl p-3 font-mono text-xs space-y-1">

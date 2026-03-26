@@ -309,12 +309,24 @@ router.get("/admin/env-template", requireAdmin, async (req, res) => {
       return result;
     }
 
-    // 1. Try .env.example and .env.sample
-    const envFiles = [".env.example", ".env.sample"];
+    // 1. Try app.json (Heroku manifest) first
     for (const b of branchesToTry) {
-      for (const envFile of envFiles) {
-        const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${envFile}`, { headers });
-        if (resp.ok) { res.json({ keys: parseEnvExample(await resp.text()), source: envFile }); return; }
+      const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/app.json`, { headers });
+      if (resp.ok) {
+        try {
+          const appJson = await resp.json() as Record<string, unknown>;
+          const envSection = appJson.env as Record<string, { description?: string; value?: string; required?: boolean }> | undefined;
+          if (envSection && typeof envSection === "object") {
+            const keys = Object.entries(envSection).map(([key, meta]) => ({
+              key,
+              defaultValue: meta?.value ?? "",
+              comment: meta?.description ?? null,
+              required: meta?.required !== false,
+            }));
+            res.json({ keys, source: "app.json" });
+            return;
+          }
+        } catch { /* invalid JSON, skip */ }
       }
     }
 
