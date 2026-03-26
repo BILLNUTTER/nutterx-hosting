@@ -149,6 +149,21 @@ function checkAbort(appId: string): boolean {
   return stopRequested.has(appId);
 }
 
+/** Write status to DB with exponential back-off. Never throws — logs on total failure. */
+async function setStatusRetrying(appId: string, status: AppStatus, errorMessage?: string): Promise<void> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      await setStatus(appId, status, errorMessage);
+      return;
+    } catch {
+      if (attempt < 7) {
+        await new Promise<void>((r) => setTimeout(r, Math.min(500 * 2 ** attempt, 20000)));
+      }
+    }
+  }
+  console.error(`[status] Gave up setting ${appId} → ${status} after 8 attempts`);
+}
+
 /** Shared helper: assign port, build env, spawn process, watch for crashes. */
 async function spawnProcess(app: App, appDir: string, pm: string): Promise<void> {
   const appId = app.id;
@@ -191,18 +206,14 @@ async function spawnProcess(app: App, appDir: string, pm: string): Promise<void>
   const [startBin, ...startArgs] = startCmd.split(" ");
   await writeLog(appId, `Starting app with: ${startCmd}`, "system");
 
-  // Mark running before spawning; retry once on transient DB blip
+  // Spawn first — never let a DB write block the process from starting
   installingApps.delete(appId);
-  try {
-    await setStatus(appId, "running");
-  } catch {
-    await new Promise<void>((r) => setTimeout(r, 1500));
-    await setStatus(appId, "running");
-  }
-
   const proc = spawn(startBin, startArgs, { cwd: appDir, env: envVars, shell: true });
   const entry: RunningProcess = { process: proc, appId, restartCount: 0, stopped: false };
   processes.set(appId, entry);
+
+  // Update DB status in background with retries (500ms → 1s → 2s → … → 20s)
+  setStatusRetrying(appId, "running").catch(() => {});
 
   proc.stdout?.on("data", (d: Buffer) => { writeLog(appId, d.toString().trimEnd(), "stdout").catch(() => {}); });
   proc.stderr?.on("data", (d: Buffer) => { writeLog(appId, d.toString().trimEnd(), "stderr").catch(() => {}); });
@@ -210,9 +221,9 @@ async function spawnProcess(app: App, appDir: string, pm: string): Promise<void>
   proc.on("close", async (code) => {
     const current = processes.get(appId);
     if (!current || current.stopped) {
-      await setStatus(appId, "stopped");
-      await writeLog(appId, `App stopped (exit code: ${code})`, "system");
       processes.delete(appId);
+      setStatusRetrying(appId, "stopped").catch(() => {});
+      await writeLog(appId, `App stopped (exit code: ${code})`, "system");
       return;
     }
     await writeLog(appId, `App crashed (exit code: ${code})`, "system");
@@ -224,19 +235,19 @@ async function spawnProcess(app: App, appDir: string, pm: string): Promise<void>
       setTimeout(() => {
         startApp(appId).catch(async (e: Error) => {
           await writeLog(appId, `Auto-restart failed: ${e.message}`, "system");
-          await setStatus(appId, "crashed");
+          setStatusRetrying(appId, "crashed").catch(() => {});
         });
       }, 2000 * current.restartCount);
     } else {
       processes.delete(appId);
-      await setStatus(appId, "crashed");
+      setStatusRetrying(appId, "crashed").catch(() => {});
     }
   });
 
   proc.on("error", async (err) => {
     await writeLog(appId, `Process error: ${err.message}`, "system");
-    await setStatus(appId, "error", err.message);
     processes.delete(appId);
+    setStatusRetrying(appId, "error", err.message).catch(() => {});
   });
 }
 
@@ -371,10 +382,10 @@ export async function startApp(appId: string): Promise<void> {
     buildProcs.delete(appId);
     if (isCancelled) {
       await writeLog(appId, "Deployment cancelled by user.", "system");
-      await setStatus(appId, "stopped");
+      setStatusRetrying(appId, "stopped").catch(() => {});
     } else {
       await writeLog(appId, `Deployment failed: ${message}`, "system");
-      await setStatus(appId, "error", message);
+      setStatusRetrying(appId, "error", message).catch(() => {});
       throw err;
     }
   }
