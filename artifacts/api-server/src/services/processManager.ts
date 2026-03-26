@@ -6,7 +6,7 @@ import { EventEmitter } from "events";
 import { eq, or } from "drizzle-orm";
 import { connectDb, db, apps, deployments } from "@workspace/db";
 import type { App } from "@workspace/db";
-import { decrypt } from "../lib/crypto.js";
+import { decrypt, isEncrypted } from "../lib/crypto.js";
 
 // In-memory log ring buffer — no DB writes for logs.
 // Capped at LOG_BUFFER_SIZE lines per app so memory stays bounded.
@@ -303,12 +303,18 @@ export async function startApp(appId: string): Promise<void> {
         throw new Error("Dependency installation timed out after 15 minutes. The app may have too many packages. Try setting a custom install command in the app settings.");
       }
 
-      // Non-timeout failure (peer dep conflict, etc.): retry without postinstall scripts
+      // Non-timeout failure: retry with npm install (not npm ci — ci is strict about
+      // lockfile sync and fails on mismatches; install is lenient) + skip postinstall.
       writeLog(appId, `Install failed: ${errMsg}`, "stderr");
-      writeLog(appId, `Retrying without postinstall scripts (--ignore-scripts)...`, "system");
-      // Remove potentially corrupted node_modules before retry
+      writeLog(appId, `Retrying with npm install --ignore-scripts...`, "system");
       await removeDir(path.join(appDir, "node_modules")).catch(() => {});
-      const fallbackArgs = [...installArgs.filter(a => a !== "--ignore-scripts"), "--ignore-scripts"];
+
+      // Always use "npm install" for the retry regardless of what the first attempt was.
+      // Replace "ci" sub-command with "install" so npm stops enforcing lockfile purity.
+      const fallbackArgs = installArgs
+        .map(a => a === "ci" ? "install" : a)
+        .filter(a => a !== "--ignore-scripts");
+      fallbackArgs.push("--ignore-scripts");
       await runCommand(installBin, fallbackArgs, appDir, appId, installEnv, INSTALL_TIMEOUT, HEARTBEAT_INTERVAL);
       writeLog(appId, `✅ Dependencies installed (postinstall scripts skipped).`, "system");
     }
@@ -319,8 +325,17 @@ export async function startApp(appId: string): Promise<void> {
     delete envVars["PORT"];
     if (NPM_GLOBAL_BIN) envVars["PATH"] = `${NPM_GLOBAL_BIN}:${envVars["PATH"] ?? ""}`;
     for (const envVar of (app.envVars ?? [])) {
-      try { envVars[envVar.key] = decrypt(envVar.value); }
-      catch { envVars[envVar.key] = envVar.value; }
+      try {
+        envVars[envVar.key] = decrypt(envVar.value);
+      } catch {
+        // If decryption fails and the value looks like ciphertext, skip it
+        // rather than injecting hex garbage into the app's environment.
+        if (!isEncrypted(envVar.value)) {
+          envVars[envVar.key] = envVar.value; // plaintext stored (no encryption key at save time)
+        } else {
+          writeLog(appId, `⚠️  Could not decrypt env var "${envVar.key}" — ENCRYPTION_KEY mismatch? Skipping.`, "system");
+        }
+      }
     }
     if (app.port) envVars["PORT"] = String(app.port);
 

@@ -5,7 +5,7 @@ import { connectDb, db, apps, logs, deployments } from "@workspace/db";
 import type { App, Deployment } from "@workspace/db";
 import { requireAuth } from "../middlewares/auth.js";
 import { startApp, stopApp, restartApp, subscribeToLogs, getLogBuffer, deleteAppFiles } from "../services/processManager.js";
-import { encrypt, decrypt } from "../lib/crypto.js";
+import { encrypt, decrypt, isEncrypted } from "../lib/crypto.js";
 
 const router: IRouter = Router();
 
@@ -33,12 +33,22 @@ function safeDecrypt(value: string): string {
   try {
     return decrypt(value);
   } catch {
+    // If ENCRYPTION_KEY is missing or wrong the raw ciphertext is meaningless.
+    // Return "" so the UI shows a blank editable field instead of hex garbage.
+    if (isEncrypted(value)) return "";
     return value;
   }
 }
 
 function encryptEnvVars(envVars: Array<{ key: string; value: string }>) {
-  return envVars.map((e) => ({ key: e.key, value: encrypt(e.value) }));
+  return envVars.map((e) => {
+    try {
+      return { key: e.key, value: encrypt(e.value) };
+    } catch {
+      // If ENCRYPTION_KEY is not set, store plaintext so the value is not lost.
+      return { key: e.key, value: e.value };
+    }
+  });
 }
 
 async function generateSlug(name: string): Promise<string> {
