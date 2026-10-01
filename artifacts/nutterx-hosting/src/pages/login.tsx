@@ -18,7 +18,15 @@ export default function Login() {
     event.preventDefault();
     if (mode === "signup" && password !== confirm) { toast({ title: "Passwords do not match", description: "Check both password fields.", variant: "destructive" }); return; }
     setPending(true);
-    try { if (mode === "login") await login({ email, password }); else await signup({ email, phone, password }); } finally { setPending(false); }
+    try {
+      if (mode === "login") await login({ email, password });
+      else await signup({ email, phone, password });
+    } catch {
+      // useAuth already shows the API error toast; consume it here so failed
+      // submissions do not become unhandled browser promise rejections.
+    } finally {
+      setPending(false);
+    }
   };
   return <main className="min-h-[100dvh] nx-shell nx-grid grid lg:grid-cols-[1.1fr_.9fr]">
     <section className="relative hidden overflow-hidden border-r border-border/70 p-12 lg:flex lg:flex-col lg:justify-between xl:p-20">

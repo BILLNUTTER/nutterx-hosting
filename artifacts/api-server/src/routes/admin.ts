@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import { getJwtSigningSecret } from "../lib/jwtSecrets.js";
 import { eq, and, desc, gt, inArray, or, sql } from "drizzle-orm";
 import {
   connectDb, db,
@@ -22,18 +23,12 @@ const ADMIN_OWNER_ID = "00000000-0000-0000-0000-000000000001";
 
 const router: IRouter = Router();
 
-function getJwtSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error("JWT_SECRET not configured");
-  return secret;
-}
-
 function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
   if (!token) { res.status(401).json({ error: "Admin authentication required" }); return; }
   try {
-    const payload = jwt.verify(token, getJwtSecret()) as { role?: string };
+    const payload = jwt.verify(token, getJwtSigningSecret("access")) as { role?: string };
     if (payload.role !== "admin") { res.status(403).json({ error: "Admin access required" }); return; }
     next();
   } catch {
@@ -51,7 +46,7 @@ router.post("/admin/login", (req, res) => {
     return;
   }
   if (username !== configuredUsername || key !== configuredKey) { res.status(401).json({ error: "Invalid admin credentials" }); return; }
-  const token = jwt.sign({ role: "admin", adminId: username }, getJwtSecret(), { expiresIn: "8h" });
+  const token = jwt.sign({ role: "admin", adminId: username }, getJwtSigningSecret("access"), { expiresIn: "8h" });
   res.json({ adminToken: token });
 });
 
@@ -560,7 +555,7 @@ router.get("/admin/my-apps/:id/logs/stream", async (req, res) => {
   const token = (req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : null)
     ?? (typeof req.query.token === "string" ? req.query.token : null);
   if (!token) { res.status(401).json({ error: "Admin authentication required" }); return; }
-  try { const p = jwt.verify(token, getJwtSecret()) as { role?: string }; if (p.role !== "admin") { res.status(403).json({ error: "Admin access required" }); return; } }
+  try { const p = jwt.verify(token, getJwtSigningSecret("access")) as { role?: string }; if (p.role !== "admin") { res.status(403).json({ error: "Admin access required" }); return; } }
   catch { res.status(401).json({ error: "Invalid or expired admin token" }); return; }
 
   try {

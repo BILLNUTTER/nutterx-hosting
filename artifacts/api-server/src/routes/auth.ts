@@ -4,27 +4,16 @@ import jwt from "jsonwebtoken";
 import { eq, and } from "drizzle-orm";
 import { connectDb, db, users, passwordResetRequests } from "@workspace/db";
 import { requireAuth } from "../middlewares/auth.js";
+import { getJwtSigningSecret } from "../lib/jwtSecrets.js";
 
 const router: IRouter = Router();
 
-function getJwtSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error("JWT_SECRET environment variable is not set");
-  return secret;
-}
-
-function getJwtRefreshSecret(): string {
-  const secret = process.env.JWT_REFRESH_SECRET;
-  if (!secret) throw new Error("JWT_REFRESH_SECRET environment variable is not set");
-  return secret;
-}
-
 function signAccess(userId: string, email: string) {
-  return jwt.sign({ userId, email }, getJwtSecret(), { expiresIn: "15m" });
+  return jwt.sign({ userId, email }, getJwtSigningSecret("access"), { expiresIn: "15m" });
 }
 
 function signRefresh(userId: string, email: string) {
-  return jwt.sign({ userId, email }, getJwtRefreshSecret(), { expiresIn: "7d" });
+  return jwt.sign({ userId, email }, getJwtSigningSecret("refresh"), { expiresIn: "7d" });
 }
 
 router.post("/auth/signup", async (req, res) => {
@@ -32,7 +21,7 @@ router.post("/auth/signup", async (req, res) => {
     await connectDb();
     const { email, phone, password } = req.body as {
       email: string;
-      phone: string;
+      phone?: string;
       password: string;
     };
 
@@ -41,10 +30,15 @@ router.post("/auth/signup", async (req, res) => {
       return;
     }
 
-    if (!phone || phone.trim().length < 7) {
+    const normalizedPhone = phone?.trim() ?? "";
+    if (normalizedPhone && normalizedPhone.length < 7) {
       res.status(400).json({ error: "A valid phone number is required" });
       return;
     }
+
+    // Fail before creating a row if production signing secrets are missing.
+    getJwtSigningSecret("access");
+    getJwtSigningSecret("refresh");
 
     const normalizedEmail = email.toLowerCase();
     const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, normalizedEmail)).limit(1);
@@ -56,7 +50,7 @@ router.post("/auth/signup", async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
     const [user] = await db.insert(users).values({
       email: normalizedEmail,
-      phone: phone.trim(),
+      phone: normalizedPhone,
       passwordHash,
     }).returning();
 
@@ -152,7 +146,7 @@ router.post("/auth/refresh", async (req, res) => {
 
     let payload: { userId: string; email: string };
     try {
-      payload = jwt.verify(refreshToken, getJwtRefreshSecret()) as { userId: string; email: string };
+      payload = jwt.verify(refreshToken, getJwtSigningSecret("refresh")) as { userId: string; email: string };
     } catch {
       res.status(401).json({ error: "Invalid or expired refresh token" });
       return;

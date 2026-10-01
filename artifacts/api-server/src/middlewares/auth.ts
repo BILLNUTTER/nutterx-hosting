@@ -1,5 +1,6 @@
 import { type Request, type Response, type NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import { getJwtSigningSecret } from "../lib/jwtSecrets.js";
 
 export interface AuthPayload {
   userId: string;
@@ -29,14 +30,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     return;
   }
 
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    res.status(500).json({ error: "JWT_SECRET not configured" });
-    return;
-  }
-
   try {
-    const payload = jwt.verify(token, secret) as AuthPayload;
+    const payload = jwt.verify(token, getJwtSigningSecret("access")) as AuthPayload;
     req.user = payload;
     next();
   } catch {

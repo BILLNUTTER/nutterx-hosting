@@ -193,7 +193,6 @@ async function spawnProcess(app: App, appDir: string, pm: string): Promise<void>
     assignedPort = await findFreePort();
     await db.update(apps).set({ port: assignedPort, updatedAt: new Date() }).where(eq(apps.id, appId));
   }
-  await killPort(assignedPort);
   await writeLog(appId, `Assigned port: ${assignedPort}`, "system");
 
   // Build runtime env — restore production NODE_ENV for the running app
