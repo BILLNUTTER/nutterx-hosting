@@ -29,6 +29,11 @@ export function setBaseUrl(url: string | null): void {
   _baseUrl = url ? url.replace(/\/+$/, "") : null;
 }
 
+/** Returns the current base URL (empty string if not set). Used by SSE hooks to build absolute URLs. */
+export function getBaseUrl(): string {
+  return _baseUrl ?? "";
+}
+
 /**
  * Register a getter that supplies a bearer auth token.  Before every fetch
  * the getter is invoked; when it returns a non-null string, an
@@ -36,9 +41,6 @@ export function setBaseUrl(url: string | null): void {
  *
  * Useful for Expo bundles making token-gated API calls.
  * Pass `null` to clear the getter.
- *
- * NOTE: This function should never be used in web applications where session
- * token cookies are automatically associated with API calls by the browser.
  */
 export function setAuthTokenGetter(getter: AuthTokenGetter | null): void {
   _authTokenGetter = getter;
@@ -360,7 +362,16 @@ export async function customFetch<T = unknown>(
 
   const requestInfo = { method, url: resolveUrl(input) };
 
-  const response = await fetch(input, { ...init, method, headers });
+  // Apply a default 15-second timeout so requests never hang indefinitely.
+  // Callers can override by passing their own signal.
+  const timeoutSignal = AbortSignal.timeout(15_000);
+  const signal = init.signal
+    ? (AbortSignal as any).any
+      ? (AbortSignal as any).any([init.signal, timeoutSignal])
+      : init.signal
+    : timeoutSignal;
+
+  const response = await fetch(input, { ...init, method, headers, signal });
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);

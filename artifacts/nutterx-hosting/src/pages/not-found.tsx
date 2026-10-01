@@ -1,0 +1,5 @@
+import { Link } from "wouter";
+import { ArrowLeft, Compass } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { NutterxLogo } from "@/components/NutterxLogo";
+export default function NotFound() { return <main className="min-h-[100dvh] nx-shell nx-grid flex items-center justify-center p-6"><div className="max-w-lg text-center"><NutterxLogo size={42} className="mx-auto" /><p className="nx-kicker mt-8 text-primary">Signal lost / 404</p><h1 className="mt-3 text-6xl font-semibold tracking-tight">Wrong orbit.</h1><p className="mt-4 text-muted-foreground">That route isn’t connected to this control room. Let’s get you back to something useful.</p><Link href="/dashboard" data-testid="link-not-found-dashboard"><Button className="mt-7 gap-2"><ArrowLeft className="h-4 w-4" /> Back to dashboard</Button></Link><Compass className="mx-auto mt-14 h-20 w-20 text-primary/10" /></div></main>; }

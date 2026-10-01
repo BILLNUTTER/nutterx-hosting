@@ -1,0 +1,42 @@
+services:
+  # ─── Nutterx Hosting — single fullstack web service ─────────────────────────
+  #
+  # Build steps (targeted — skips mockup-sandbox and other dev-only artifacts):
+  #   1. typecheck:libs  → generates TypeScript declaration files for workspace libs
+  #   2. api-server build → compiles TypeScript API to dist/index.mjs
+  #   3. nutterx-hosting build → Vite produces static files in dist/public
+  #
+  # At runtime the Express API serves all /api/* routes and falls back to
+  # serving the Vite-built frontend for every other path (SPA routing).
+  - type: web
+    name: nutterx-hosting
+    runtime: node
+    buildCommand: >-
+      npm install -g pnpm@9 &&
+      pnpm install --frozen-lockfile &&
+      pnpm run typecheck:libs &&
+      pnpm --filter @workspace/api-server run build &&
+      BASE_PATH=/ pnpm --filter @workspace/nutterx-hosting run build
+    startCommand: "pnpm --filter @workspace/api-server run start"
+    plan: starter
+    healthCheckPath: /api/healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # App clones live in /tmp — ephemeral, re-created on restart by recoverApps()
+      # App data is stored in PostgreSQL; cloned repositories are ephemeral.
+      - key: APPS_DIR
+        value: /tmp/nutterx-apps
+      # ── Secrets: add these in the Render dashboard ─────────────────────────
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_KEY
+        sync: false

@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Nutterx Hosting"
+description = "A hosting dashboard for deploying GitHub applications, monitoring their runtime status, and managing environment settings."
+version = "1.0.0"
+id = "artifacts/nutterx-hosting"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25013
+
+[services.development]
+run = "pnpm --filter @workspace/nutterx-hosting run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/nutterx-hosting", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/nutterx-hosting/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25013"
+BASE_PATH = "/"
