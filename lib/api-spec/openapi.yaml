@@ -208,6 +208,52 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /apps/repo-meta:
+    get:
+      operationId: getRepoMeta
+      tags: [apps]
+      summary: Detect runtime commands and port from a GitHub repository
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: repoUrl
+          in: query
+          required: true
+          schema:
+            type: string
+          description: GitHub repository URL
+        - name: branch
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Repository branch (defaults to main or master)
+      responses:
+        "200":
+          description: Detected runtime configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepoMeta"
+        "400":
+          description: Invalid repository URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Repository package manifest not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /apps/env-template:
     get:
       operationId: getEnvTemplate
@@ -732,6 +778,28 @@ components:
             $ref: "#/components/schemas/EnvVar"
       required:
         - envVars
+
+    RepoMeta:
+      type: object
+      properties:
+        startCommand:
+          type: ["string", "null"]
+        buildCommand:
+          type: ["string", "null"]
+        installCommand:
+          type: ["string", "null"]
+        port:
+          type: ["integer", "null"]
+        scripts:
+          type: array
+          items:
+            type: string
+      required:
+        - startCommand
+        - buildCommand
+        - installCommand
+        - port
+        - scripts
 
     EnvTemplate:
       type: object

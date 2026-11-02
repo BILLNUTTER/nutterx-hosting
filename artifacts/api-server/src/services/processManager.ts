@@ -1,5 +1,5 @@
 import { spawn, exec, execSync, type ChildProcess } from "child_process";
-import { existsSync, mkdirSync, rm } from "fs";
+import { existsSync, mkdirSync, readFileSync, rm } from "fs";
 import net from "net";
 import path from "path";
 import os from "os";
@@ -139,6 +139,20 @@ async function setStatus(appId: string, status: AppStatus, errorMessage?: string
 function detectPackageManager(appDir: string): string {
   if (existsSync(path.join(appDir, "pnpm-lock.yaml"))) return "pnpm";
   if (existsSync(path.join(appDir, "yarn.lock"))) return "yarn";
+  const packageJsonPath = path.join(appDir, "package.json");
+  if (existsSync(packageJsonPath)) {
+    try {
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+        packageManager?: unknown;
+      };
+      if (typeof packageJson.packageManager === "string") {
+        const manager = packageJson.packageManager.split("@")[0];
+        if (manager === "npm" || manager === "pnpm" || manager === "yarn") return manager;
+      }
+    } catch {
+      // Fall back to npm if package.json cannot be parsed.
+    }
+  }
   return "npm";
 }
 

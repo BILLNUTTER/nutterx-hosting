@@ -98,9 +98,9 @@ router.get("/apps/env-template", requireAuth, async (req: Request, res: Response
       ? [branch, "main", "master"].filter((v, i, a) => a.indexOf(v) === i)
       : ["main", "master"];
 
-    // 1. Try .env.example and .env.sample
+    // 1. Try common environment template files
     for (const b of branchesToTry) {
-      for (const envFile of [".env.example", ".env.sample"]) {
+      for (const envFile of [".env.example", ".env.sample", ".env.template"]) {
         const resp = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${envFile}`, { headers });
         if (resp.ok) {
           res.json({ keys: parseEnvExample(await resp.text()), source: envFile });
@@ -201,7 +201,7 @@ router.get("/apps/repo-meta", requireAuth, async (req: Request, res: Response) =
     }
 
     const scripts = (pkgJson.scripts as Record<string, string> | undefined) ?? {};
-    let startCommand: string | null = scripts.start ?? scripts.serve ?? null;
+    let startCommand: string | null = scripts.start ?? scripts.serve ?? scripts.dev ?? null;
     const buildCommand = scripts.build ?? null;
 
     if (!startCommand && typeof pkgJson.main === "string" && pkgJson.main) {
@@ -225,8 +225,6 @@ router.get("/apps/repo-meta", requireAuth, async (req: Request, res: Response) =
     if (pkgJson.packageManager && typeof pkgJson.packageManager === "string") {
       const pm = (pkgJson.packageManager as string).split("@")[0];
       installCommand = `${pm} install`;
-    } else {
-      installCommand = "npm install";
     }
 
     let port: number | null = null;

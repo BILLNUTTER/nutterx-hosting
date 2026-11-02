@@ -1,13 +1,19 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 
 const ALGORITHM = "aes-256-gcm";
 
 function getKey(): Buffer {
   const raw = process.env.ENCRYPTION_KEY;
-  if (!raw) {
-    throw new Error("ENCRYPTION_KEY environment variable is not set");
+  if (raw?.trim()) return createHash("sha256").update(raw).digest();
+
+  const sessionSecret = process.env.SESSION_SECRET;
+  if (process.env.NODE_ENV !== "production" && sessionSecret?.trim()) {
+    return createHmac("sha256", sessionSecret)
+      .update("nutterx-hosting:env-encryption:v1")
+      .digest();
   }
-  return createHash("sha256").update(raw).digest();
+
+  throw new Error("ENCRYPTION_KEY environment variable is not set");
 }
 
 export function encrypt(plaintext: string): string {
