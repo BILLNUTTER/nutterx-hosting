@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
 import { AppLayout } from "@/components/AppLayout";
 import { StatusBadge } from "@/components/StatusBadge";
-import { useGetApp, useStartApp, useStopApp, useRestartApp, useDeleteApp, useUpdateEnvVars, getGetAppQueryKey } from "@workspace/api-client-react";
+import { useGetApp, useStartApp, useStopApp, useRestartApp, useDeleteApp, useUpdateEnvVars, getGetAppQueryKey, getGetEnvTemplateQueryKey, useGetEnvTemplate } from "@workspace/api-client-react";
 import { useLogStream } from "@/hooks/use-log-stream";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -25,7 +25,20 @@ export default function AppDetail() {
   const { data: app, isLoading } = useGetApp(id!, {
     query: { queryKey: getGetAppQueryKey(id!), refetchInterval: 3000 }
   });
-
+  const envTemplateParams = useMemo(() => ({ repoUrl: app?.repoUrl ?? "" }), [app?.repoUrl]);
+  const envTemplateQuery = useGetEnvTemplate(envTemplateParams, {
+    query: {
+      queryKey: getGetEnvTemplateQueryKey(envTemplateParams),
+      enabled: Boolean(app?.repoUrl) && (app?.envVars?.length ?? 0) === 0 && activeTab === "settings",
+      retry: false,
+      staleTime: 300_000,
+    },
+  });
+  const detectedEnvVars = useMemo(
+    () => (envTemplateQuery.data?.keys ?? []).map(({ key, defaultValue }) => ({ key, value: defaultValue ?? "" })),
+    [envTemplateQuery.data],
+  );
+  const displayEnvVars = app?.envVars?.length ? app.envVars : detectedEnvVars;
   const { mutate: startApp, isPending: isStarting } = useStartApp({
     mutation: { onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetAppQueryKey(id!) }) }
   });
@@ -39,11 +52,13 @@ export default function AppDetail() {
   const { mutateAsync: updateEnvVars, isPending: isUpdatingEnv } = useUpdateEnvVars();
 
   const { logs, clearLogs } = useLogStream(id!);
-  const logsEndRef = useRef<HTMLDivElement>(null);
+  const logsContainerRef = useRef<HTMLDivElement>(null);
+  const shouldFollowLogsRef = useRef(true);
   const [showAllCrashLogs, setShowAllCrashLogs] = useState(false);
 
   const handleStart = () => {
     clearLogs();
+    shouldFollowLogsRef.current = true;
     setShowAllCrashLogs(false);
     setActiveTab("logs");
     startApp({ id: app!.id });
@@ -51,14 +66,18 @@ export default function AppDetail() {
 
   const handleRestart = () => {
     clearLogs();
+    shouldFollowLogsRef.current = true;
     setShowAllCrashLogs(false);
     setActiveTab("logs");
     restartApp({ id: app!.id });
   };
 
-  // Auto-scroll logs
+  // Follow new output inside the console only; never move the document page.
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const container = logsContainerRef.current;
+    if (container && shouldFollowLogsRef.current) {
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    }
   }, [logs]);
 
   // Env vars state — only sync from server when NOT actively editing
@@ -68,20 +87,16 @@ export default function AppDetail() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
   useEffect(() => {
-    // Don't clobber the form while user is editing — they clicked Edit explicitly
-    if (!isEditingEnv && app?.envVars) {
-      setEnvForm(app.envVars);
-    }
-  }, [app?.envVars, isEditingEnv]);
+    if (!isEditingEnv) setEnvForm(displayEnvVars);
+  }, [displayEnvVars, isEditingEnv]);
 
   const handleStartEdit = () => {
-    // Take a fresh snapshot of the current saved values, then enter edit mode
-    setEnvForm(app?.envVars ?? []);
+    setEnvForm(displayEnvVars);
     setIsEditingEnv(true);
   };
 
   const handleCancelEdit = () => {
-    setEnvForm(app?.envVars ?? []);
+    setEnvForm(displayEnvVars);
     setIsEditingEnv(false);
   };
 
@@ -137,6 +152,8 @@ export default function AppDetail() {
   if (!app) return null;
 
   const isProcessActive = app.status === "running" || app.status === "installing";
+  const securityPolicyBlocked = app.errorMessage?.toLowerCase().includes("security policy")
+    || logs.some(log => /blocked by security policy|access denied:/i.test(log.line));
 
   return (
     <AppLayout>
@@ -184,6 +201,17 @@ export default function AppDetail() {
         </div>
       </div>
 
+      {app.status === "error" && (
+        <div role="alert" className="mb-6 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm">
+          <p className="font-semibold text-destructive">{securityPolicyBlocked ? "Dependency install blocked by Replit security policy" : "Deployment failed"}</p>
+          <p className="mt-1 text-muted-foreground">
+            {securityPolicyBlocked
+              ? "Review the denied dependency in Console Logs, update it in the repository, then retry. Nutterx will not bypass the package security check."
+              : app.errorMessage || "Review Console Logs for the process error."}
+          </p>
+        </div>
+      )}
+
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="bg-card border border-border w-full justify-start h-12 rounded-xl mb-6">
           <TabsTrigger value="logs" className="gap-2 data-[state=active]:bg-background"><Terminal className="w-4 h-4" /> Console Logs</TabsTrigger>
@@ -207,7 +235,14 @@ export default function AppDetail() {
                   </Button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-4 font-mono text-[13px] leading-relaxed custom-scrollbar">
+                <div
+                  ref={logsContainerRef}
+                  onScroll={(event) => {
+                    const element = event.currentTarget;
+                    shouldFollowLogsRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+                  }}
+                  className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 font-mono text-[13px] leading-relaxed custom-scrollbar"
+                >
                   {logs.length === 0 ? (
                     <div className="text-zinc-600 italic">Waiting for logs...</div>
                   ) : (() => {
@@ -249,7 +284,6 @@ export default function AppDetail() {
                       </>
                     );
                   })()}
-                  <div ref={logsEndRef} />
                 </div>
               </Card>
             </div>
@@ -315,7 +349,7 @@ export default function AppDetail() {
                   </div>
 
                   {!isEditingEnv ? (
-                    <Button variant="outline" onClick={handleStartEdit} className="gap-2 flex-shrink-0">
+                    <Button variant="outline" onClick={handleStartEdit} disabled={envTemplateQuery.isFetching} className="gap-2 flex-shrink-0">
                       <Pencil className="w-4 h-4" /> Edit
                     </Button>
                   ) : (
@@ -347,7 +381,9 @@ export default function AppDetail() {
                   /* Read-only view */
                   <div className="space-y-2">
                     {envForm.length === 0 ? (
-                      <p className="text-sm text-muted-foreground italic">No environment variables configured.</p>
+                      <p className="text-sm text-muted-foreground italic">
+                        {envTemplateQuery.isFetching ? "Checking the repository for environment keys…" : "No environment variables saved or detected."}
+                      </p>
                     ) : (
                       envForm.map((ev, i) => (
                         <div key={i} className="flex items-center gap-3 font-mono text-sm bg-black/20 border border-border rounded-md px-3 py-2">
@@ -356,7 +392,7 @@ export default function AppDetail() {
                         </div>
                       ))
                     )}
-                    <Button variant="outline" onClick={handleStartEdit} className="w-full border-dashed mt-2 gap-2">
+                    <Button variant="outline" onClick={handleStartEdit} disabled={envTemplateQuery.isFetching} className="w-full border-dashed mt-2 gap-2">
                       <Pencil className="w-3.5 h-3.5" /> Edit Variables
                     </Button>
                   </div>

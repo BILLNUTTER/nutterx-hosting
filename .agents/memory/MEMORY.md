@@ -1,0 +1,1 @@
+- [OpenAPI codegen availability](openapi-codegen-availability.md) — Replit’s package firewall currently denies Orval, so generated clients may be unavailable.

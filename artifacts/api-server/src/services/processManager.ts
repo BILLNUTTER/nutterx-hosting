@@ -165,13 +165,20 @@ async function runCommand(cmd: string, args: string[], cwd: string, appId: strin
   return new Promise((resolve, reject) => {
     if (stopRequested.has(appId)) { reject(new Error("Build cancelled by user")); return; }
     const proc = spawn(cmd, args, { cwd, env: env ?? process.env, shell: true });
+    let stderrTail = "";
     buildProcs.set(appId, proc);
     proc.stdout?.on("data", (d: Buffer) => emitLines(appId, d, "system"));
-    proc.stderr?.on("data", (d: Buffer) => emitLines(appId, d, "stderr"));
+    proc.stderr?.on("data", (d: Buffer) => {
+      stderrTail = `${stderrTail}${d.toString()}`.slice(-8_000);
+      emitLines(appId, d, "stderr");
+    });
     proc.on("close", (code) => {
       buildProcs.delete(appId);
       if (code === 0) resolve();
       else if (code === null && stopRequested.has(appId)) reject(new Error("Build cancelled by user"));
+      else if (/Blocked by Security Policy|package-firewall\.replit\.internal|Socket Security Policy/i.test(stderrTail)) {
+        reject(new Error("Dependency installation was blocked by Replit's package security policy. Review the denied package in Console Logs, update it in the repository, then retry."));
+      }
       else reject(new Error(`Process exited with code ${code}`));
     });
     proc.on("error", (err) => { buildProcs.delete(appId); reject(err); });
@@ -397,6 +404,10 @@ export async function startApp(appId: string): Promise<void> {
     } catch (installErr) {
       const errMsg = installErr instanceof Error ? installErr.message : String(installErr);
       await writeLog(appId, `Dependency install failed: ${errMsg}`, "stderr");
+      if (/blocked by replit's package security policy/i.test(errMsg)) {
+        await writeLog(appId, "Skipping the fallback install because the package security policy denied a dependency.", "system");
+        throw installErr;
+      }
       await writeLog(appId, `Retrying without native module compilation (--ignore-scripts)...`, "system");
       const fallbackArgs = [...installArgs, "--ignore-scripts"];
       await runCommand(installBin, fallbackArgs, appDir, appId, installEnv);
